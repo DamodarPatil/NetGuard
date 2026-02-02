@@ -7,17 +7,34 @@ from core.sniffer import PacketSniffer
 
 
 def main():
-    print("=" * 60)
-    print("NetGuard - Packet Capture Test (Enhanced)")
-    print("=" * 60)
-    print("\n💡 Tip: Generate traffic in another terminal:")
-    print("   ping 8.8.8.8       # ICMP packets")
-    print("   curl google.com    # TCP/DNS packets")
-    print("   or browse the web\n")
+    print("=" * 70)
+    print("NetGuard - SQLite Database Integration (Phase 2)")
+    print("=" * 70)
+    print("\n💾 All packets now stored in SQLite database (data/netguard.db)")
+    print("   Much faster and more efficient than CSV!")
+    print()
+    print("💡 Generate diverse traffic to see smart detection:")
+    print("   ping 8.8.8.8                    # ICMP Echo Request/Reply")
+    print("   curl http://example.com         # HTTP")
+    print("   curl https://google.com         # HTTPS/QUIC")
+    print()
+    print("🔍 After capture, query your data:")
+    print("   python3 query_db.py --stats          # Show statistics")
+    print("   python3 query_db.py --recent 100     # Last 100 packets")
+    print("   python3 query_db.py --ip 8.8.8.8      # Search by IP")
+    print("   python3 query_db.py --protocol TCP   # Search by protocol")
+    print()
+    print("📚 See DATABASE_GUIDE.md for advanced queries")
+    print("\n⚠️  Press Ctrl+C to stop and see session summary\n")
     
-    # Capture 30 packets for testing
-    sniffer = PacketSniffer(interface=None, packet_count=1000)
-    sniffer.start()
+    # Initialize sniffer with database
+    sniffer = PacketSniffer(
+        interface=None,
+        db_path="data/netguard.db"
+    )
+    
+    # Capture 30 packets to see variety (use 0 for infinite)
+    sniffer.start(count=1000)
 
 
 if __name__ == "__main__":

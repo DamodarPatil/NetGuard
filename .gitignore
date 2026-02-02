@@ -17,10 +17,12 @@ build/
 *.sqlite
 *.sqlite3
 data/*.db
+data/netguard.db
 
 # Logs
 logs/*.log
 *.log
+network_log.csv
 
 # IDE
 .vscode/
