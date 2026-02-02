@@ -1,0 +1,11 @@
+# NetGuard Dependencies
+# Core
+scapy>=2.5.0
+# Database
+# (sqlite3 is built-in)
+# CLI
+rich>=13.0.0
+# GUI (install later)
+# customtkinter>=5.0.0
+# Reports (install later)
+# reportlab>=4.0.0
