@@ -2,7 +2,7 @@
 NetGuard Packet Sniffer Module
 Production-Ready: Phase 3 - Wireshark-Inspired Enhanced Monitoring
 """
-from scapy.all import sniff, IP, IPv6, TCP, UDP, ICMP, ARP, Raw, get_if_list, conf
+from scapy.all import sniff, IP, IPv6, TCP, UDP, ICMP, ICMPv6EchoRequest, ICMPv6EchoReply, ICMPv6ND_NS, ICMPv6ND_NA, ICMPv6ND_RA, ICMPv6DestUnreach, ICMPv6PacketTooBig, ICMPv6TimeExceeded, ICMPv6MLReport2, ARP, Raw, get_if_list, conf
 from datetime import datetime
 import threading
 import os
@@ -64,6 +64,25 @@ class PacketSniffer:
             return local_ip
         except Exception:
             return "127.0.0.1"  # Fallback
+    
+    def _classify_ipv6_address(self, ipv6_addr):
+        """Classify IPv6 address type for better understanding."""
+        addr_str = str(ipv6_addr)
+        
+        if addr_str.startswith("fe80:"):
+            return "Link-Local"  # Local network only
+        elif addr_str.startswith("ff02:"):
+            return "Multicast-Link"  # All nodes on local link
+        elif addr_str.startswith("ff"):
+            return "Multicast"
+        elif addr_str.startswith("fc") or addr_str.startswith("fd"):
+            return "Unique-Local"  # Private IPv6
+        elif addr_str.startswith("2") or addr_str.startswith("3"):
+            return "Global-Unicast"  # Public internet
+        elif addr_str == "::1":
+            return "Loopback"
+        else:
+            return "Other"
     
     def _init_csv_logging(self):
         """Initialize CSV file with headers."""
@@ -180,26 +199,36 @@ class PacketSniffer:
             transport_proto_num = packet[IP].proto
             
         elif IPv6 in packet:
+            # IPv6 packet - extract source/destination and parse next header
             packet_data['src'] = packet[IPv6].src
             packet_data['dst'] = packet[IPv6].dst
-            packet_data['transport_protocol'] = 'IPv6'
-            packet_data['application_protocol'] = 'UNKNOWN'
-            packet_data['info'] = 'IPv6 Packet'
-            packet_data['direction'] = self._determine_direction(packet_data['src'], packet_data['dst'])
             is_ipv6 = True
             
             # Display addresses (truncated)
             packet_data['display_src'] = self._truncate_ipv6(packet_data['src'])
             packet_data['display_dst'] = self._truncate_ipv6(packet_data['dst'])
-            return packet_data
+            
+            # IPv6 Next Header field indicates the protocol inside
+            # Protocol numbers: 6=TCP, 17=UDP, 58=ICMPv6
+            transport_proto_num = packet[IPv6].nh
             
         elif ARP in packet:
-            packet_data['src'] = packet[ARP].psrc
-            packet_data['dst'] = packet[ARP].pdst
+            arp_layer = packet[ARP]
+            packet_data['src'] = arp_layer.psrc
+            packet_data['dst'] = arp_layer.pdst
             packet_data['transport_protocol'] = 'ARP'
             packet_data['application_protocol'] = 'ARP'
-            packet_data['info'] = f"Who has {packet[ARP].pdst}? Tell {packet[ARP].psrc}"
-            packet_data['direction'] = 'OUTGOING'  # ARP requests are typically outgoing
+            
+            # Distinguish between ARP request and reply
+            if arp_layer.op == 1:  # ARP Request
+                packet_data['info'] = f"Who has {arp_layer.pdst}? Tell {arp_layer.psrc}"
+                packet_data['direction'] = 'OUTGOING'
+            elif arp_layer.op == 2:  # ARP Reply
+                packet_data['info'] = f"{arp_layer.psrc} is at {arp_layer.hwsrc}"
+                packet_data['direction'] = 'INCOMING'
+            else:
+                packet_data['info'] = f"ARP Operation {arp_layer.op}"
+                packet_data['direction'] = 'OUTGOING'
             
             # Display addresses
             packet_data['display_src'] = packet_data['src']
@@ -209,9 +238,10 @@ class PacketSniffer:
         else:
             return None  # Ignore non-IP/ARP traffic
         
-        # 3. Create display versions (for terminal output)
-        packet_data['display_src'] = packet_data['src']
-        packet_data['display_dst'] = packet_data['dst']
+        # 3. Create display versions (for terminal output) - only for IPv4
+        if not is_ipv6:
+            packet_data['display_src'] = packet_data['src']
+            packet_data['display_dst'] = packet_data['dst']
         
         # 4. Determine traffic direction
         packet_data['direction'] = self._determine_direction(packet_data['src'], packet_data['dst'])
@@ -299,70 +329,76 @@ class PacketSniffer:
             # Payload check for keep-alive detection
             payload_len = len(packet[TCP].payload) if packet[TCP].payload else 0
             
-            # Priority-based flag interpretation
+            # Build flag display string for Info column
+            flag_display = f"[{packet_data['tcp_flags']}]" if packet_data['tcp_flags'] else ""
+            
+            # Determine action based on flags (priority-based)
             if has_syn and not has_ack:
                 # SYN flag only = Connection initiation
-                packet_data['info'] = f'[SYN] Connection Request → :{dst_port}'
+                action = f'Connection Request → :{dst_port}'
             elif has_syn and has_ack:
                 # SYN-ACK = Connection accepted
-                packet_data['info'] = f'[SYN-ACK] Connection Accepted ← :{src_port}'
+                action = f'Connection Accepted ← :{src_port}'
             elif has_fin:
                 # FIN flag = Connection closing
-                packet_data['info'] = f'[FIN] Closing Connection :{dst_port}'
+                action = f'Closing Connection :{dst_port}'
             elif has_rst:
                 # RST flag = Connection reset/refused
-                packet_data['info'] = f'[RST] Connection Reset/Refused :{dst_port}'
-            elif has_ack and payload_len == 0:
-                # ACK with no payload = Keep-alive or acknowledgment
-                packet_data['info'] = f'[ACK] Keep-Alive / Acknowledgment'
-            elif has_psh and has_ack:
+                action = f'Connection Reset/Refused :{dst_port}'
+            elif has_psh and has_ack and payload_len > 0:
                 # PSH+ACK = Data transfer
                 if app_proto == 'TLS':
-                    packet_data['info'] = f'TLS Handshake / Client Hello'
+                    action = f'TLS Handshake / Client Hello'
                 elif app_proto != 'UNKNOWN':
-                    packet_data['info'] = f'{app_proto} Data Transfer ({payload_len} bytes)'
+                    action = f'{app_proto} Data Transfer ({payload_len} bytes)'
                 else:
-                    packet_data['info'] = f'TCP Data Transfer :{dst_port} ({payload_len} bytes)'
+                    action = f'TCP Data Transfer :{dst_port} ({payload_len} bytes)'
+            elif has_ack and payload_len == 0:
+                # ACK with no payload = Keep-alive or acknowledgment
+                action = f'Keep-Alive / Acknowledgment'
             else:
                 # Default: Use application protocol if known
                 if app_proto == 'TLS':
-                    packet_data['info'] = 'TLS Encrypted Communication'
+                    action = 'TLS Encrypted Communication'
                 elif app_proto == 'HTTP':
-                    packet_data['info'] = 'HTTP | Unencrypted Web Traffic'
+                    action = 'HTTP | Unencrypted Web Traffic'
                 elif app_proto == 'HTTPS':
-                    packet_data['info'] = 'HTTPS | Encrypted Web Browsing'
+                    action = 'HTTPS | Encrypted Web Browsing'
                 elif app_proto == 'SSH':
-                    packet_data['info'] = 'SSH | Secure Remote Shell'
+                    action = 'SSH | Secure Remote Shell'
                 elif app_proto == 'FTP':
-                    packet_data['info'] = 'FTP | File Transfer (Unencrypted)'
+                    action = 'FTP | File Transfer (Unencrypted)'
                 elif app_proto == 'FTP-DATA':
-                    packet_data['info'] = 'FTP-DATA | Active File Transfer'
+                    action = 'FTP-DATA | Active File Transfer'
                 elif app_proto == 'RDP':
-                    packet_data['info'] = 'RDP | Remote Desktop Connection'
+                    action = 'RDP | Remote Desktop Connection'
                 elif app_proto == 'SMTP':
-                    packet_data['info'] = 'SMTP | Email Server Communication'
+                    action = 'SMTP | Email Server Communication'
                 elif app_proto == 'POP3':
-                    packet_data['info'] = 'POP3 | Email Retrieval'
+                    action = 'POP3 | Email Retrieval'
                 elif app_proto == 'IMAP':
-                    packet_data['info'] = 'IMAP | Email Sync'
+                    action = 'IMAP | Email Sync'
                 elif app_proto == 'IMAPS':
-                    packet_data['info'] = 'IMAPS | Secure Email Sync'
+                    action = 'IMAPS | Secure Email Sync'
                 elif app_proto == 'MySQL':
-                    packet_data['info'] = 'MySQL | Database Connection'
+                    action = 'MySQL | Database Connection'
                 elif app_proto == 'PostgreSQL':
-                    packet_data['info'] = 'PostgreSQL | Database Query'
+                    action = 'PostgreSQL | Database Query'
                 elif app_proto == 'MongoDB':
-                    packet_data['info'] = 'MongoDB | NoSQL Database'
+                    action = 'MongoDB | NoSQL Database'
                 elif app_proto == 'Redis':
-                    packet_data['info'] = 'Redis | Cache/Data Store'
+                    action = 'Redis | Cache/Data Store'
                 elif app_proto == 'HTTP-ALT':
-                    packet_data['info'] = 'HTTP-ALT | Web Proxy/Dev Server'
+                    action = 'HTTP-ALT | Web Proxy/Dev Server'
                 elif app_proto == 'HTTPS-ALT':
-                    packet_data['info'] = 'HTTPS-ALT | Alternate Secure Web'
+                    action = 'HTTPS-ALT | Alternate Secure Web'
                 elif app_proto == 'Telnet':
-                    packet_data['info'] = 'Telnet | Insecure Remote Access'
+                    action = 'Telnet | Insecure Remote Access'
                 else:
-                    packet_data['info'] = f'TCP Communication :{dst_port}'
+                    action = f'TCP Communication :{dst_port}'
+            
+            # Combine flags and action
+            packet_data['info'] = f'{flag_display} {action}' if flag_display else action
         
         # ==== UDP Protocol Handling ====
         elif UDP in packet:
@@ -377,8 +413,19 @@ class PacketSniffer:
             # Application protocol detection
             app_proto = 'UNKNOWN'
             if dst_port == 443 or src_port == 443:
+                # QUIC detection (HTTP/3 over UDP port 443)
                 app_proto = 'QUIC'
-                packet_data['info'] = 'QUIC | HTTP/3 Fast Web'
+                
+                # Check for QUIC packet patterns in payload
+                if packet.haslayer(Raw):
+                    payload = bytes(packet[Raw].load)
+                    # QUIC Initial packets often start with 0xc0-0xff (long header)
+                    if len(payload) > 0 and (payload[0] & 0x80):
+                        packet_data['info'] = 'QUIC: Connection Handshake'
+                    else:
+                        packet_data['info'] = f'QUIC: Encrypted Data (Port {dst_port})'
+                else:
+                    packet_data['info'] = f'QUIC: Traffic (Port {dst_port})'
             elif dst_port == 53 or src_port == 53:
                 app_proto = 'DNS'
                 packet_data['info'] = 'DNS | Domain Name Lookup'
@@ -437,6 +484,53 @@ class PacketSniffer:
                 packet_data['info'] = 'ICMP Time Exceeded | TTL Expired'
             else:
                 packet_data['info'] = f'ICMP Type {icmp_type}'
+        
+        # ==== ICMPv6 Protocol Handling (IPv6 only) ====
+        elif transport_proto_num == 58:  # ICMPv6 protocol number
+            packet_data['transport_protocol'] = 'ICMPv6'
+            packet_data['application_protocol'] = 'ICMPv6'
+            
+            # ICMPv6 type mapping (for reference)
+            icmpv6_type_names = {
+                1: "Destination Unreachable",
+                2: "Packet Too Big",
+                3: "Time Exceeded",
+                4: "Parameter Problem",
+                128: "Echo Request (Ping)",
+                129: "Echo Reply (Pong)",
+                133: "Router Solicitation",
+                134: "Router Advertisement",
+                135: "Neighbor Solicitation",
+                136: "Neighbor Advertisement",
+                143: "Multicast Listener Report v2"
+            }
+            
+            # Check for specific ICMPv6 layers
+            if packet.haslayer(ICMPv6ND_NS):
+                packet_data['info'] = 'ICMPv6: Neighbor Solicitation (IPv6 ARP Request)'
+            elif packet.haslayer(ICMPv6ND_NA):
+                packet_data['info'] = 'ICMPv6: Neighbor Advertisement (IPv6 ARP Reply)'
+            elif packet.haslayer(ICMPv6ND_RA):
+                dst_type = self._classify_ipv6_address(packet_data['dst'])
+                if dst_type == "Multicast-Link":
+                    packet_data['info'] = 'ICMPv6: Router Advertisement (Broadcast to all local devices)'
+                else:
+                    packet_data['info'] = 'ICMPv6: Router Advertisement'
+            elif packet.haslayer(ICMPv6MLReport2):
+                packet_data['info'] = 'ICMPv6: Multicast Listener Report v2'
+            elif packet.haslayer(ICMPv6EchoRequest):
+                packet_data['info'] = 'ICMPv6: Echo Request (Ping)'
+            elif packet.haslayer(ICMPv6EchoReply):
+                packet_data['info'] = 'ICMPv6: Echo Reply (Pong)'
+            elif packet.haslayer(ICMPv6DestUnreach):
+                packet_data['info'] = 'ICMPv6: Destination Unreachable'
+            elif packet.haslayer(ICMPv6PacketTooBig):
+                packet_data['info'] = 'ICMPv6: Packet Too Big'
+            elif packet.haslayer(ICMPv6TimeExceeded):
+                packet_data['info'] = 'ICMPv6: Time Exceeded'
+            else:
+                # Try to get type from any ICMPv6 layer
+                packet_data['info'] = 'ICMPv6: Network Control Protocol'
         
         else:
             # Unknown transport protocol
