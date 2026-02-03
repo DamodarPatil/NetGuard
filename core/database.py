@@ -26,18 +26,20 @@ class NetGuardDatabase:
         # Ensure data directory exists
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         
-        # Initialize database
+        # Create persistent connection
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.cursor = self.conn.cursor()
+        
+        # Initialize database schema
         self._init_database()
     
     def _init_database(self):
         """Create tables and indexes if they don't exist."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
         # Main packets table - Enhanced with Wireshark-inspired fields
-        cursor.execute("""
+        # Using AUTOINCREMENT to avoid ID conflicts across sessions
+        self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS packets (
-                packet_id INTEGER PRIMARY KEY,
+                packet_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 absolute_timestamp DATETIME NOT NULL,
                 relative_time REAL,
                 src_ip TEXT NOT NULL,
@@ -55,7 +57,7 @@ class NetGuardDatabase:
         """)
         
         # Protocol statistics table
-        cursor.execute("""
+        self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS protocol_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 protocol TEXT UNIQUE NOT NULL,
@@ -66,7 +68,7 @@ class NetGuardDatabase:
         """)
         
         # Session information table
-        cursor.execute("""
+        self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 start_time DATETIME NOT NULL,
@@ -79,38 +81,37 @@ class NetGuardDatabase:
         """)
         
         # Create indexes for faster queries
-        cursor.execute("""
+        self.cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_packets_timestamp 
             ON packets(absolute_timestamp)
         """)
         
-        cursor.execute("""
+        self.cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_packets_transport_protocol 
             ON packets(transport_protocol)
         """)
         
-        cursor.execute("""
+        self.cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_packets_application_protocol 
             ON packets(application_protocol)
         """)
         
-        cursor.execute("""
+        self.cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_packets_src_ip 
             ON packets(src_ip)
         """)
         
-        cursor.execute("""
+        self.cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_packets_dst_ip 
             ON packets(dst_ip)
         """)
         
-        cursor.execute("""
+        self.cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_packets_direction 
             ON packets(direction)
         """)
         
-        conn.commit()
-        conn.close()
+        self.conn.commit()
     
     def start_session(self, interface: Optional[str] = None) -> int:
         """
@@ -122,17 +123,13 @@ class NetGuardDatabase:
         Returns:
             Session ID
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute("""
+        self.cursor.execute("""
             INSERT INTO sessions (start_time, interface)
             VALUES (?, ?)
         """, (datetime.now(), interface))
         
-        session_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+        session_id = self.cursor.lastrowid
+        self.conn.commit()
         
         return session_id
     
@@ -145,10 +142,7 @@ class NetGuardDatabase:
             total_packets: Total packets captured
             total_bytes: Total bytes transferred
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute("""
+        self.cursor.execute("""
             UPDATE sessions 
             SET end_time = ?, 
                 total_packets = ?, 
@@ -157,8 +151,7 @@ class NetGuardDatabase:
             WHERE id = ?
         """, (datetime.now(), total_packets, total_bytes, session_id))
         
-        conn.commit()
-        conn.close()
+        self.conn.commit()
     
     def insert_packet(self, packet_data: Dict):
         """
@@ -167,19 +160,16 @@ class NetGuardDatabase:
         Args:
             packet_data: Dictionary containing packet information
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute("""
+        # Let SQLite auto-generate packet_id via AUTOINCREMENT
+        self.cursor.execute("""
             INSERT INTO packets (
-                packet_id, absolute_timestamp, relative_time,
+                absolute_timestamp, relative_time,
                 src_ip, dst_ip, src_port, dst_port,
                 transport_protocol, application_protocol, tcp_flags,
                 direction, packet_length, info
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            packet_data['packet_id'],
             packet_data['absolute_timestamp'],
             packet_data['relative_time'],
             packet_data['src'],  # Full IP address
@@ -196,7 +186,7 @@ class NetGuardDatabase:
         
         # Update protocol statistics (use application protocol if available, else transport)
         protocol_for_stats = packet_data['application_protocol'] or packet_data['transport_protocol']
-        cursor.execute("""
+        self.cursor.execute("""
             INSERT INTO protocol_stats (protocol, packet_count, total_bytes, last_seen)
             VALUES (?, 1, ?, ?)
             ON CONFLICT(protocol) DO UPDATE SET
@@ -211,8 +201,13 @@ class NetGuardDatabase:
             packet_data['absolute_timestamp']
         ))
         
-        conn.commit()
-        conn.close()
+        self.conn.commit()
+    
+    def close(self):
+        """Close the database connection."""
+        if self.conn:
+            self.conn.close()
+            self.conn = None
     
     def get_packet_count(self) -> int:
         """Get total number of packets in database."""
@@ -378,7 +373,7 @@ class NetGuardDatabase:
         
         cursor.execute("""
             DELETE FROM packets
-            WHERE timestamp < datetime('now', '-' || ? || ' days')
+            WHERE absolute_timestamp < datetime('now', '-' || ? || ' days')
         """, (days,))
         
         deleted = cursor.rowcount
@@ -412,6 +407,7 @@ class NetGuardDatabase:
             query += f" LIMIT {limit}"
         
         cursor.execute(query)
+        rows = cursor.fetchall()
         
         with open(output_file, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -421,8 +417,9 @@ class NetGuardDatabase:
                 'Transport_Protocol', 'Application_Protocol', 'TCP_Flags',
                 'Direction', 'Packet_Length', 'Info'
             ])
-            writer.writerows(cursor.fetchall())
+            writer.writerows(rows)
         
         conn.close()
         
-        return cursor.rowcount
+        return len(rows)
+

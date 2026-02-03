@@ -273,14 +273,6 @@ class PacketSniffer:
                     app_proto = 'TLS'
                 else:
                     app_proto = 'HTTPS'
-            # Application protocol detection
-            app_proto = 'UNKNOWN'
-            if dst_port == 443 or src_port == 443:
-                # Check for TLS handshake
-                if self._detect_tls_handshake(packet):
-                    app_proto = 'TLS'
-                else:
-                    app_proto = 'HTTPS'
             elif dst_port == 80 or src_port == 80:
                 app_proto = 'HTTP'
             elif dst_port == 22 or src_port == 22:
@@ -315,6 +307,58 @@ class PacketSniffer:
                 app_proto = 'HTTPS-ALT'
             elif dst_port == 23 or src_port == 23:
                 app_proto = 'Telnet'
+            # === NEW: Additional Protocol Detection ===
+            # Tor/Onion routing
+            elif dst_port == 9001 or src_port == 9001:
+                app_proto = 'Tor'
+            elif dst_port == 9050 or src_port == 9050:
+                app_proto = 'Tor-SOCKS'
+            elif dst_port == 9150 or src_port == 9150:
+                app_proto = 'Tor-Browser'
+            # Proxy protocols
+            elif dst_port == 1080 or src_port == 1080:
+                app_proto = 'SOCKS'
+            elif dst_port == 3128 or src_port == 3128:
+                app_proto = 'Squid-Proxy'
+            elif dst_port == 8888 or src_port == 8888:
+                app_proto = 'HTTP-Proxy'
+            # BitTorrent
+            elif dst_port == 6881 or src_port == 6881:
+                app_proto = 'BitTorrent'
+            elif 6881 <= dst_port <= 6889 or 6881 <= src_port <= 6889:
+                app_proto = 'BitTorrent'
+            # Other databases
+            elif dst_port == 9200 or src_port == 9200:
+                app_proto = 'Elasticsearch'
+            elif dst_port == 5984 or src_port == 5984:
+                app_proto = 'CouchDB'
+            elif dst_port == 11211 or src_port == 11211:
+                app_proto = 'Memcached'
+            # Messaging & Streaming
+            elif dst_port == 5672 or src_port == 5672:
+                app_proto = 'AMQP'
+            elif dst_port == 1883 or src_port == 1883:
+                app_proto = 'MQTT'
+            elif dst_port == 9092 or src_port == 9092:
+                app_proto = 'Kafka'
+            # Gaming
+            elif dst_port == 25565 or src_port == 25565:
+                app_proto = 'Minecraft'
+            # Docker & Kubernetes
+            elif dst_port == 2375 or src_port == 2375:
+                app_proto = 'Docker'
+            elif dst_port == 2376 or src_port == 2376:
+                app_proto = 'Docker-TLS'
+            elif dst_port == 6443 or src_port == 6443:
+                app_proto = 'Kubernetes'
+            # Git
+            elif dst_port == 9418 or src_port == 9418:
+                app_proto = 'Git'
+            # LDAP
+            elif dst_port == 389 or src_port == 389:
+                app_proto = 'LDAP'
+            elif dst_port == 636 or src_port == 636:
+                app_proto = 'LDAPS'
             
             packet_data['application_protocol'] = app_proto
             
@@ -766,6 +810,10 @@ class PacketSniffer:
             if self.session_id:
                 self.db.end_session(self.session_id, self.packets_captured, self.total_bytes)
             
+            # Close database connection
+            self.db.close()
+            
             # Always print summary on exit
             if self.packets_captured > 0:
                 self._print_session_summary()
+
