@@ -54,16 +54,52 @@ class PacketSniffer:
             self._init_csv_logging()
 
     def _get_local_ip(self):
-        """Get the local IP address for traffic direction detection."""
+        """Get the local IP addresses (IPv4 and IPv6) for traffic direction detection."""
+        local_ips = set()
+        
+        # Get IPv4
         try:
-            # Create a socket to determine the local IP
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))  # Google DNS, doesn't actually send data
-            local_ip = s.getsockname()[0]
+            s.connect(("8.8.8.8", 80))
+            local_ips.add(s.getsockname()[0])
             s.close()
-            return local_ip
         except Exception:
-            return "127.0.0.1"  # Fallback
+            local_ips.add("127.0.0.1")
+        
+        # Get IPv6
+        try:
+            s6 = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            s6.connect(("2001:4860:4860::8888", 80))
+            local_ips.add(s6.getsockname()[0])
+            s6.close()
+        except Exception:
+            pass  # IPv6 not available
+        
+        # Also add common local addresses
+        local_ips.add("127.0.0.1")
+        local_ips.add("::1")
+        
+        return local_ips
+    
+    def _is_private_ip(self, ip):
+        """Check if IP is a private/local address."""
+        # IPv4 private ranges
+        if ip.startswith('10.'):
+            return True
+        if ip.startswith('192.168.'):
+            return True
+        if ip.startswith('172.'):
+            # 172.16.0.0 - 172.31.255.255
+            try:
+                second_octet = int(ip.split('.')[1])
+                if 16 <= second_octet <= 31:
+                    return True
+            except:
+                pass
+        # IPv6 link-local (fe80::) and unique local (fc00::/7)
+        if ip.startswith('fe80:') or ip.startswith('fc') or ip.startswith('fd'):
+            return True
+        return False
     
     def _classify_ipv6_address(self, ipv6_addr):
         """Classify IPv6 address type for better understanding."""
@@ -147,13 +183,19 @@ class PacketSniffer:
     
     def _determine_direction(self, src_ip, dst_ip):
         """Determine if traffic is INCOMING or OUTGOING."""
-        if src_ip == self.local_ip:
+        # Check if source is our local IP (outgoing)
+        if src_ip in self.local_ip:
             return 'OUTGOING'
-        elif dst_ip == self.local_ip:
+        # Check if destination is our local IP (incoming)
+        elif dst_ip in self.local_ip:
             return 'INCOMING'
         else:
             # For packets not directly to/from local IP (e.g., promiscuous mode)
-            return 'OUTGOING' if src_ip.startswith('192.168.') or src_ip.startswith('10.') else 'INCOMING'
+            # If source is private/local, assume outgoing; otherwise incoming
+            if self._is_private_ip(src_ip):
+                return 'OUTGOING'
+            else:
+                return 'INCOMING'
     
     def analyze_packet(self, packet):
         """
@@ -222,10 +264,18 @@ class PacketSniffer:
             # Distinguish between ARP request and reply
             if arp_layer.op == 1:  # ARP Request
                 packet_data['info'] = f"Who has {arp_layer.pdst}? Tell {arp_layer.psrc}"
-                packet_data['direction'] = 'OUTGOING'
+                # If someone is asking for OUR IP, it's incoming; if WE are asking, it's outgoing
+                if arp_layer.pdst in self.local_ip:
+                    packet_data['direction'] = 'INCOMING'
+                else:
+                    packet_data['direction'] = 'OUTGOING'
             elif arp_layer.op == 2:  # ARP Reply
                 packet_data['info'] = f"{arp_layer.psrc} is at {arp_layer.hwsrc}"
-                packet_data['direction'] = 'INCOMING'
+                # If WE are replying (source is our IP), it's outgoing
+                if arp_layer.psrc in self.local_ip:
+                    packet_data['direction'] = 'OUTGOING'
+                else:
+                    packet_data['direction'] = 'INCOMING'
             else:
                 packet_data['info'] = f"ARP Operation {arp_layer.op}"
                 packet_data['direction'] = 'OUTGOING'
@@ -359,6 +409,9 @@ class PacketSniffer:
                 app_proto = 'LDAP'
             elif dst_port == 636 or src_port == 636:
                 app_proto = 'LDAPS'
+            # WHOIS (domain registration lookup)
+            elif dst_port == 43 or src_port == 43:
+                app_proto = 'WHOIS'
             
             packet_data['application_protocol'] = app_proto
             
@@ -770,7 +823,7 @@ class PacketSniffer:
             
             print(f"🛡️  NetGuard Wireshark-Inspired Monitoring Started")
             print(f"Interface: {self.interface or 'All'}")
-            print(f"Local IP: {self.local_ip}")
+            print(f"Local IPs: {', '.join(self.local_ip)}")
             print(f"Database: {self.db_path}")
             if self.csv_file:
                 print(f"CSV Export: {self.csv_file}")
