@@ -2,13 +2,36 @@
 NetGuard Packet Sniffer Module
 Production-Ready: Phase 3 - Wireshark-Inspired Enhanced Monitoring
 """
-from scapy.all import sniff, IP, IPv6, TCP, UDP, ICMP, ICMPv6EchoRequest, ICMPv6EchoReply, ICMPv6ND_NS, ICMPv6ND_NA, ICMPv6ND_RA, ICMPv6DestUnreach, ICMPv6PacketTooBig, ICMPv6TimeExceeded, ICMPv6MLReport2, ARP, Raw, get_if_list, conf
+from scapy.all import sniff, IP, IPv6, TCP, UDP, ICMP, ICMPv6EchoRequest, ICMPv6EchoReply, ICMPv6ND_NS, ICMPv6ND_NA, ICMPv6ND_RA, ICMPv6DestUnreach, ICMPv6PacketTooBig, ICMPv6TimeExceeded, ICMPv6MLReport2, ARP, Raw, get_if_list, conf, DNS, DNSQR, DNSRR
+from scapy.layers.http import HTTPRequest, HTTPResponse
 from datetime import datetime
 import threading
+import queue
+import struct
 import os
 import socket
 import csv
 from .database import NetGuardDatabase
+
+# DNS query type mapping
+DNS_QTYPES = {
+    1: 'A', 2: 'NS', 5: 'CNAME', 6: 'SOA', 12: 'PTR', 15: 'MX',
+    16: 'TXT', 28: 'AAAA', 33: 'SRV', 35: 'NAPTR', 43: 'DS',
+    46: 'RRSIG', 48: 'DNSKEY', 52: 'TLSA', 65: 'HTTPS', 255: 'ANY'
+}
+
+# TLS version mapping
+TLS_VERSIONS = {
+    0x0300: 'SSLv3', 0x0301: 'TLSv1.0', 0x0302: 'TLSv1.1',
+    0x0303: 'TLSv1.2', 0x0304: 'TLSv1.3'
+}
+
+# TLS handshake type mapping
+TLS_HS_TYPES = {
+    1: 'Client Hello', 2: 'Server Hello', 4: 'New Session Ticket',
+    11: 'Certificate', 12: 'Server Key Exchange', 14: 'Server Hello Done',
+    16: 'Client Key Exchange', 20: 'Finished'
+}
 
 class PacketSniffer:
     """
@@ -29,6 +52,11 @@ class PacketSniffer:
         self.db_path = db_path
         self.csv_file = csv_file
         self.stop_sniffing = threading.Event()
+        
+        # Queue-based capture: producer-consumer pattern for zero-drop capture
+        self._packet_queue = queue.Queue(maxsize=0)  # Unlimited buffer
+        self._worker_thread = None
+        self._processing_done = threading.Event()
         
         # Packet indexing and timing
         self.packet_id = 0
@@ -173,6 +201,198 @@ class PacketSniffer:
             flag_names.append('URG')
         return ','.join(flag_names) if flag_names else ''
     
+    def _extract_sni(self, payload):
+        """Extract Server Name Indication (SNI) from TLS Client Hello payload."""
+        try:
+            # TLS record header: type(1) + version(2) + length(2) = 5 bytes
+            # Handshake header: type(1) + length(3) + version(2) + random(32) = 38 bytes from record payload
+            # After random: session_id_len(1) + session_id + cipher_suites_len(2) + ...
+            if len(payload) < 44:
+                return None
+            
+            offset = 5  # Skip TLS record header
+            offset += 1 + 3  # Skip handshake type + length
+            offset += 2  # Skip client version
+            offset += 32  # Skip random
+            
+            if offset >= len(payload):
+                return None
+            
+            # Session ID
+            sid_len = payload[offset]
+            offset += 1 + sid_len
+            
+            if offset + 2 > len(payload):
+                return None
+            
+            # Cipher suites
+            cs_len = struct.unpack('!H', payload[offset:offset + 2])[0]
+            offset += 2 + cs_len
+            
+            if offset >= len(payload):
+                return None
+            
+            # Compression methods
+            comp_len = payload[offset]
+            offset += 1 + comp_len
+            
+            if offset + 2 > len(payload):
+                return None
+            
+            # Extensions
+            ext_len = struct.unpack('!H', payload[offset:offset + 2])[0]
+            offset += 2
+            ext_end = offset + ext_len
+            
+            while offset + 4 <= ext_end and offset + 4 <= len(payload):
+                ext_type = struct.unpack('!H', payload[offset:offset + 2])[0]
+                ext_data_len = struct.unpack('!H', payload[offset + 2:offset + 4])[0]
+                offset += 4
+                
+                if ext_type == 0:  # SNI extension
+                    if offset + 5 <= len(payload):
+                        # SNI list length(2) + type(1) + name_length(2) + name
+                        sni_list_len = struct.unpack('!H', payload[offset:offset + 2])[0]
+                        name_type = payload[offset + 2]
+                        name_len = struct.unpack('!H', payload[offset + 3:offset + 5])[0]
+                        if name_type == 0 and offset + 5 + name_len <= len(payload):
+                            return payload[offset + 5:offset + 5 + name_len].decode('ascii', errors='replace')
+                    return None
+                
+                offset += ext_data_len
+            
+            return None
+        except Exception:
+            return None
+    
+    def _analyze_tls_payload(self, payload):
+        """
+        Deep TLS analysis: detect version, handshake type, and SNI.
+        
+        Returns:
+            tuple: (tls_version_str, info_str) or (None, None) if not TLS
+        """
+        if len(payload) < 6:
+            return None, None
+        
+        content_type = payload[0]
+        record_ver = (payload[1] << 8) | payload[2]
+        
+        # Content type 0x16 = Handshake
+        if content_type == 0x16:
+            hs_type = payload[5] if len(payload) > 5 else None
+            hs_name = TLS_HS_TYPES.get(hs_type, f'Handshake Type {hs_type}')
+            
+            # Determine TLS version from record header
+            tls_ver = TLS_VERSIONS.get(record_ver, f'TLS(0x{record_ver:04x})')
+            
+            if hs_type == 1:  # Client Hello
+                sni = self._extract_sni(payload)
+                # Check for TLS 1.3 via supported_versions extension
+                # (Client Hello record says TLS 1.2 but may negotiate 1.3)
+                info = f'Client Hello'
+                if sni:
+                    info += f' (SNI={sni})'
+                return tls_ver, info
+            elif hs_type == 2:  # Server Hello
+                return tls_ver, 'Server Hello'
+            else:
+                return tls_ver, hs_name
+        
+        # Content type 0x14 = Change Cipher Spec
+        elif content_type == 0x14:
+            tls_ver = TLS_VERSIONS.get(record_ver, f'TLS(0x{record_ver:04x})')
+            return tls_ver, 'Change Cipher Spec'
+        
+        # Content type 0x17 = Application Data (encrypted)
+        elif content_type == 0x17:
+            tls_ver = TLS_VERSIONS.get(record_ver, f'TLS(0x{record_ver:04x})')
+            data_len = struct.unpack('!H', payload[3:5])[0] if len(payload) >= 5 else 0
+            return tls_ver, f'Encrypted Data ({data_len} bytes)'
+        
+        # Content type 0x15 = Alert
+        elif content_type == 0x15:
+            tls_ver = TLS_VERSIONS.get(record_ver, f'TLS(0x{record_ver:04x})')
+            return tls_ver, 'Alert'
+        
+        return None, None
+    
+    def _extract_dns_info(self, packet):
+        """
+        Extract detailed DNS information: query type, domain name, response records.
+        
+        Returns:
+            str: Detailed DNS info string
+        """
+        try:
+            if not packet.haslayer(DNS):
+                return 'DNS | Domain Name Lookup'
+            
+            dns = packet[DNS]
+            
+            # Get query name and type
+            qname = ''
+            qtype_name = ''
+            if dns.qd:
+                raw_qname = dns.qd.qname
+                if isinstance(raw_qname, bytes):
+                    qname = raw_qname.decode('utf-8', errors='replace').rstrip('.')
+                else:
+                    qname = str(raw_qname).rstrip('.')
+                qtype_name = DNS_QTYPES.get(dns.qd.qtype, str(dns.qd.qtype))
+            
+            if dns.qr == 0:  # Query
+                return f'Standard query {qtype_name} {qname}'
+            else:  # Response
+                answers = []
+                # dns.an is a list-like object in modern Scapy; ancount can be None
+                if dns.an:
+                    for i, rr in enumerate(dns.an):
+                        if i >= 4:  # Limit for readability
+                            break
+                        try:
+                            if hasattr(rr, 'type') and hasattr(rr, 'rdata'):
+                                rtype = DNS_QTYPES.get(rr.type, str(rr.type))
+                                rdata = str(rr.rdata).rstrip('.')
+                                answers.append(f'{rtype} {rdata}')
+                        except Exception:
+                            pass
+                
+                answer_str = ', '.join(answers) if answers else 'No records'
+                return f'Standard query response {qtype_name} {qname} → {answer_str}'
+        except Exception:
+            return 'DNS | Domain Name Lookup'
+    
+    def _extract_http_info(self, packet):
+        """
+        Extract detailed HTTP information: method, URL, status code, content type.
+        
+        Returns:
+            tuple: (app_proto, info_str)
+        """
+        try:
+            if packet.haslayer(HTTPRequest):
+                req = packet[HTTPRequest]
+                method = req.Method.decode() if req.Method else 'GET'
+                path = req.Path.decode() if req.Path else '/'
+                version = req.Http_Version.decode() if req.Http_Version else 'HTTP/1.1'
+                host = req.Host.decode() if req.Host else ''
+                return 'HTTP', f'{method} {path} {version}'
+            
+            elif packet.haslayer(HTTPResponse):
+                resp = packet[HTTPResponse]
+                version = resp.Http_Version.decode() if resp.Http_Version else '1.1'
+                code = resp.Status_Code.decode() if resp.Status_Code else '???'
+                reason = resp.Reason_Phrase.decode() if resp.Reason_Phrase else ''
+                ctype = ''
+                if resp.Content_Type:
+                    ctype = resp.Content_Type.decode().split(';')[0].strip()
+                    return 'HTTP', f'HTTP/{version} {code} {reason} ({ctype})'
+                return 'HTTP', f'HTTP/{version} {code} {reason}'
+        except Exception:
+            pass
+        return None, None
+    
     def _detect_tls_handshake(self, packet):
         """Detect TLS handshake by checking for 0x16 byte in payload."""
         if Raw in packet:
@@ -180,6 +400,23 @@ class PacketSniffer:
             if len(payload) > 0 and payload[0] == 0x16:
                 return True
         return False
+    
+    def _fast_callback(self, packet):
+        """Ultra-fast sniff callback — just queue the packet, zero processing."""
+        self._packet_queue.put(packet)
+    
+    def _packet_worker(self):
+        """Worker thread: drain queue and process packets with full analysis."""
+        while not (self.stop_sniffing.is_set() and self._packet_queue.empty()):
+            try:
+                packet = self._packet_queue.get(timeout=0.5)
+                self.packet_callback(packet)
+                self._packet_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"[!] Worker error: {e}")
+        self._processing_done.set()
     
     def _determine_direction(self, src_ip, dst_ip):
         """Determine if traffic is INCOMING or OUTGOING."""
@@ -307,6 +544,9 @@ class PacketSniffer:
             src_port = packet[TCP].sport
             dst_port = packet[TCP].dport
             tcp_flags_raw = packet[TCP].flags
+            seq = packet[TCP].seq
+            ack_num = packet[TCP].ack
+            win = packet[TCP].window
             
             # Store ports as separate fields
             packet_data['src_port'] = src_port
@@ -315,14 +555,35 @@ class PacketSniffer:
             # Extract TCP flags
             packet_data['tcp_flags'] = self._extract_tcp_flags(tcp_flags_raw)
             
-            # Application protocol detection
-            app_proto = 'UNKNOWN'
+            # Payload length
+            payload_len = len(packet[TCP].payload) if packet[TCP].payload else 0
+            
+            # Flag display
+            flag_str = packet_data['tcp_flags']
+            flag_display = f"[{flag_str}]" if flag_str else ""
+            
+            # === Deep Protocol Detection (content-based, like Wireshark) ===
+            
+            # 1. Try HTTP layer detection first (Scapy auto-detects HTTP content)
+            http_proto, http_info = self._extract_http_info(packet)
+            if http_proto:
+                packet_data['application_protocol'] = http_proto
+                packet_data['info'] = http_info
+                return packet_data
+            
+            # 2. Try deep TLS analysis (version, SNI, handshake type)
+            if Raw in packet:
+                payload = bytes(packet[Raw].load)
+                tls_ver, tls_info = self._analyze_tls_payload(payload)
+                if tls_ver and tls_info:
+                    packet_data['application_protocol'] = tls_ver
+                    packet_data['info'] = tls_info
+                    return packet_data
+            
+            # 3. Port-based application protocol fallback
+            app_proto = 'TCP'
             if dst_port == 443 or src_port == 443:
-                # Check for TLS handshake
-                if self._detect_tls_handshake(packet):
-                    app_proto = 'TLS'
-                else:
-                    app_proto = 'HTTPS'
+                app_proto = 'TCP'  # TLS detection handled above; bare TCP to 443
             elif dst_port == 80 or src_port == 80:
                 app_proto = 'HTTP'
             elif dst_port == 22 or src_port == 22:
@@ -357,145 +618,55 @@ class PacketSniffer:
                 app_proto = 'HTTPS-ALT'
             elif dst_port == 23 or src_port == 23:
                 app_proto = 'Telnet'
-            # === NEW: Additional Protocol Detection ===
-            # Tor/Onion routing
             elif dst_port == 9001 or src_port == 9001:
                 app_proto = 'Tor'
             elif dst_port == 9050 or src_port == 9050:
                 app_proto = 'Tor-SOCKS'
             elif dst_port == 9150 or src_port == 9150:
                 app_proto = 'Tor-Browser'
-            # Proxy protocols
             elif dst_port == 1080 or src_port == 1080:
                 app_proto = 'SOCKS'
             elif dst_port == 3128 or src_port == 3128:
                 app_proto = 'Squid-Proxy'
             elif dst_port == 8888 or src_port == 8888:
                 app_proto = 'HTTP-Proxy'
-            # BitTorrent
             elif dst_port == 6881 or src_port == 6881:
                 app_proto = 'BitTorrent'
             elif 6881 <= dst_port <= 6889 or 6881 <= src_port <= 6889:
                 app_proto = 'BitTorrent'
-            # Other databases
             elif dst_port == 9200 or src_port == 9200:
                 app_proto = 'Elasticsearch'
             elif dst_port == 5984 or src_port == 5984:
                 app_proto = 'CouchDB'
             elif dst_port == 11211 or src_port == 11211:
                 app_proto = 'Memcached'
-            # Messaging & Streaming
             elif dst_port == 5672 or src_port == 5672:
                 app_proto = 'AMQP'
             elif dst_port == 1883 or src_port == 1883:
                 app_proto = 'MQTT'
             elif dst_port == 9092 or src_port == 9092:
                 app_proto = 'Kafka'
-            # Gaming
             elif dst_port == 25565 or src_port == 25565:
                 app_proto = 'Minecraft'
-            # Docker & Kubernetes
             elif dst_port == 2375 or src_port == 2375:
                 app_proto = 'Docker'
             elif dst_port == 2376 or src_port == 2376:
                 app_proto = 'Docker-TLS'
             elif dst_port == 6443 or src_port == 6443:
                 app_proto = 'Kubernetes'
-            # Git
             elif dst_port == 9418 or src_port == 9418:
                 app_proto = 'Git'
-            # LDAP
             elif dst_port == 389 or src_port == 389:
                 app_proto = 'LDAP'
             elif dst_port == 636 or src_port == 636:
                 app_proto = 'LDAPS'
-            # WHOIS (domain registration lookup)
             elif dst_port == 43 or src_port == 43:
                 app_proto = 'WHOIS'
             
             packet_data['application_protocol'] = app_proto
             
-            # === CRITICAL: Dynamic TCP Info based on FLAGS ===
-            # This provides connection state visibility, not just protocol labels
-            has_syn = bool(tcp_flags_raw & 0x02)
-            has_ack = bool(tcp_flags_raw & 0x10)
-            has_fin = bool(tcp_flags_raw & 0x01)
-            has_rst = bool(tcp_flags_raw & 0x04)
-            has_psh = bool(tcp_flags_raw & 0x08)
-            
-            # Payload check for keep-alive detection
-            payload_len = len(packet[TCP].payload) if packet[TCP].payload else 0
-            
-            # Build flag display string for Info column
-            flag_display = f"[{packet_data['tcp_flags']}]" if packet_data['tcp_flags'] else ""
-            
-            # Determine action based on flags (priority-based)
-            if has_syn and not has_ack:
-                # SYN flag only = Connection initiation
-                action = f'Connection Request → :{dst_port}'
-            elif has_syn and has_ack:
-                # SYN-ACK = Connection accepted
-                action = f'Connection Accepted ← :{src_port}'
-            elif has_fin:
-                # FIN flag = Connection closing
-                action = f'Closing Connection :{dst_port}'
-            elif has_rst:
-                # RST flag = Connection reset/refused
-                action = f'Connection Reset/Refused :{dst_port}'
-            elif has_psh and has_ack and payload_len > 0:
-                # PSH+ACK = Data transfer
-                if app_proto == 'TLS':
-                    action = f'TLS Handshake / Client Hello'
-                elif app_proto != 'UNKNOWN':
-                    action = f'{app_proto} Data Transfer ({payload_len} bytes)'
-                else:
-                    action = f'TCP Data Transfer :{dst_port} ({payload_len} bytes)'
-            elif has_ack and payload_len == 0:
-                # ACK with no payload = Keep-alive or acknowledgment
-                action = f'Keep-Alive / Acknowledgment'
-            else:
-                # Default: Use application protocol if known
-                if app_proto == 'TLS':
-                    action = 'TLS Encrypted Communication'
-                elif app_proto == 'HTTP':
-                    action = 'HTTP | Unencrypted Web Traffic'
-                elif app_proto == 'HTTPS':
-                    action = 'HTTPS | Encrypted Web Browsing'
-                elif app_proto == 'SSH':
-                    action = 'SSH | Secure Remote Shell'
-                elif app_proto == 'FTP':
-                    action = 'FTP | File Transfer (Unencrypted)'
-                elif app_proto == 'FTP-DATA':
-                    action = 'FTP-DATA | Active File Transfer'
-                elif app_proto == 'RDP':
-                    action = 'RDP | Remote Desktop Connection'
-                elif app_proto == 'SMTP':
-                    action = 'SMTP | Email Server Communication'
-                elif app_proto == 'POP3':
-                    action = 'POP3 | Email Retrieval'
-                elif app_proto == 'IMAP':
-                    action = 'IMAP | Email Sync'
-                elif app_proto == 'IMAPS':
-                    action = 'IMAPS | Secure Email Sync'
-                elif app_proto == 'MySQL':
-                    action = 'MySQL | Database Connection'
-                elif app_proto == 'PostgreSQL':
-                    action = 'PostgreSQL | Database Query'
-                elif app_proto == 'MongoDB':
-                    action = 'MongoDB | NoSQL Database'
-                elif app_proto == 'Redis':
-                    action = 'Redis | Cache/Data Store'
-                elif app_proto == 'HTTP-ALT':
-                    action = 'HTTP-ALT | Web Proxy/Dev Server'
-                elif app_proto == 'HTTPS-ALT':
-                    action = 'HTTPS-ALT | Alternate Secure Web'
-                elif app_proto == 'Telnet':
-                    action = 'Telnet | Insecure Remote Access'
-                else:
-                    action = f'TCP Communication :{dst_port}'
-            
-            # Combine flags and action
-            packet_data['info'] = f'{flag_display} {action}' if flag_display else action
+            # === Wireshark-style TCP Info: port → port [FLAGS] Seq=X Ack=X Win=X Len=X ===
+            packet_data['info'] = f'{src_port} → {dst_port} {flag_display} Seq={seq} Ack={ack_num} Win={win} Len={payload_len}'
         
         # ==== UDP Protocol Handling ====
         elif UDP in packet:
@@ -507,8 +678,8 @@ class PacketSniffer:
             packet_data['src_port'] = src_port
             packet_data['dst_port'] = dst_port
             
-            # Application protocol detection
-            app_proto = 'UNKNOWN'
+            # Application protocol detection with deep inspection
+            app_proto = 'UDP'
             if dst_port == 443 or src_port == 443:
                 # QUIC detection (HTTP/3 over UDP port 443)
                 app_proto = 'QUIC'
@@ -516,16 +687,15 @@ class PacketSniffer:
                 # Check for QUIC packet patterns in payload
                 if packet.haslayer(Raw):
                     payload = bytes(packet[Raw].load)
-                    # QUIC Initial packets often start with 0xc0-0xff (long header)
                     if len(payload) > 0 and (payload[0] & 0x80):
                         packet_data['info'] = 'QUIC: Connection Handshake'
                     else:
-                        packet_data['info'] = f'QUIC: Encrypted Data (Port {dst_port})'
+                        packet_data['info'] = f'QUIC: Encrypted Data ({len(payload)} bytes)'
                 else:
-                    packet_data['info'] = f'QUIC: Traffic (Port {dst_port})'
+                    packet_data['info'] = f'QUIC: Protected Payload'
             elif dst_port == 53 or src_port == 53:
                 app_proto = 'DNS'
-                packet_data['info'] = 'DNS | Domain Name Lookup'
+                packet_data['info'] = self._extract_dns_info(packet)
             elif dst_port == 67 or src_port == 67:
                 app_proto = 'DHCP'
                 packet_data['info'] = 'DHCP Server | IP Address Assignment'
@@ -549,7 +719,8 @@ class PacketSniffer:
                 packet_data['info'] = 'OpenVPN | Encrypted Tunnel'
             elif dst_port == 5353 or src_port == 5353:
                 app_proto = 'mDNS'
-                packet_data['info'] = 'mDNS | Local Network Discovery'
+                # mDNS also uses DNS format, so extract details
+                packet_data['info'] = self._extract_dns_info(packet)
             elif dst_port == 137 or src_port == 137:
                 app_proto = 'NetBIOS-NS'
                 packet_data['info'] = 'NetBIOS | Windows Name Service'
@@ -560,7 +731,7 @@ class PacketSniffer:
                 app_proto = 'SSDP'
                 packet_data['info'] = 'SSDP | UPnP Device Discovery'
             else:
-                packet_data['info'] = f'UDP Datagram :{dst_port}'
+                packet_data['info'] = f'UDP Datagram :{dst_port} ({len(packet[UDP].payload)} bytes)'
             
             packet_data['application_protocol'] = app_proto
         
@@ -583,7 +754,13 @@ class PacketSniffer:
                 packet_data['info'] = f'ICMP Type {icmp_type}'
         
         # ==== ICMPv6 Protocol Handling (IPv6 only) ====
-        elif transport_proto_num == 58:  # ICMPv6 protocol number
+        elif transport_proto_num == 58 or (is_ipv6 and (
+            packet.haslayer(ICMPv6ND_NS) or packet.haslayer(ICMPv6ND_NA) or
+            packet.haslayer(ICMPv6ND_RA) or packet.haslayer(ICMPv6MLReport2) or
+            packet.haslayer(ICMPv6EchoRequest) or packet.haslayer(ICMPv6EchoReply) or
+            packet.haslayer(ICMPv6DestUnreach) or packet.haslayer(ICMPv6PacketTooBig) or
+            packet.haslayer(ICMPv6TimeExceeded)
+        )):  # ICMPv6: direct or behind extension headers (e.g. Hop-by-Hop)
             packet_data['transport_protocol'] = 'ICMPv6'
             packet_data['application_protocol'] = 'ICMPv6'
             
@@ -807,6 +984,7 @@ class PacketSniffer:
     def start(self, count=0):
         """
         Start packet capture with Wireshark-inspired monitoring.
+        Uses queue-based architecture for zero-drop capture.
         
         Args:
             count: Number of packets to capture (0 = infinite)
@@ -829,14 +1007,23 @@ class PacketSniffer:
                 print(f"CSV Export: {self.csv_file}")
             print(f"Session ID: {self.session_id}")
             print(f"Packets to Capture: {count if count > 0 else '∞'}")
+            print(f"Capture Mode: Queue-based (zero-drop)")
             print("-" * 100)
             print(f"{'[ID]':<7} {'[Timestamp]':<27} {'[RelTime]':<10} {'PROTOCOL':<9} | {'SOURCE':<22} → {'DESTINATION':<22} | {'DIRECTION':<9} | {'SIZE':<6} | INFO")
             print("-" * 100 + "\n")
             
-            # Start sniffing
+            # Start worker thread for packet processing
+            self._worker_thread = threading.Thread(
+                target=self._packet_worker,
+                name="NetGuard-PacketWorker",
+                daemon=True
+            )
+            self._worker_thread.start()
+            
+            # Start sniffing with ultra-fast callback (just queues packets)
             sniff(
                 iface=self.interface,
-                prn=self.packet_callback,
+                prn=self._fast_callback,
                 count=count,
                 store=False
             )
@@ -855,6 +1042,15 @@ class PacketSniffer:
             print(f"[!] Sniffer Error: {e}")
             
         finally:
+            # Signal worker to stop and wait for it to drain the queue
+            self.stop_sniffing.set()
+            if self._worker_thread and self._worker_thread.is_alive():
+                try:
+                    print("[*] Processing remaining queued packets...")
+                    self._worker_thread.join(timeout=10)
+                except KeyboardInterrupt:
+                    print("\n[!] Skipping queue drain (interrupted)")
+            
             # Close CSV file if open
             if hasattr(self, 'csv_file_handle') and self.csv_file_handle:
                 self.csv_file_handle.close()
@@ -869,4 +1065,5 @@ class PacketSniffer:
             # Always print summary on exit
             if self.packets_captured > 0:
                 self._print_session_summary()
+
 
