@@ -140,40 +140,27 @@ def print_stats_table(transport_counts, application_counts, direction_counts,
     
     console.print(Panel(overview, title="[bold cyan]Session Overview[/]", border_style="cyan"))
     
-    # Application protocol table
+    # Unified protocols table — each packet counted once
     if application_counts:
-        app_table = Table(title="Application Protocols", border_style="yellow")
-        app_table.add_column("Protocol", style="bold yellow", min_width=12)
-        app_table.add_column("Packets", justify="right", style="white")
-        app_table.add_column("%", justify="right", style="dim")
-        app_table.add_column("Distribution", min_width=30)
+        proto_table = Table(title="Protocols", border_style="yellow")
+        proto_table.add_column("Protocol", style="bold yellow", min_width=12)
+        proto_table.add_column("Packets", justify="right", style="white")
+        proto_table.add_column("%", justify="right", style="dim")
+        proto_table.add_column("Distribution", min_width=30)
         
-        sorted_app = sorted(application_counts.items(), key=lambda x: x[1], reverse=True)
-        for proto, count in sorted_app[:15]:
+        sorted_protos = sorted(application_counts.items(), key=lambda x: x[1], reverse=True)
+        for proto, count in sorted_protos[:20]:
             pct = (count / total_packets * 100) if total_packets > 0 else 0
             bar_len = int(pct / 2)
             bar = "█" * bar_len + "░" * (50 - bar_len)
             color = PROTO_COLORS.get(proto, 'white')
-            app_table.add_row(
+            proto_table.add_row(
                 f"[{color}]{proto}[/]",
                 f"{count:,}",
                 f"{pct:.1f}%",
                 f"[{color}]{bar}[/]"
             )
-        console.print(app_table)
-    
-    # Transport protocol table
-    if transport_counts:
-        tr_table = Table(title="Transport Protocols", border_style="blue")
-        tr_table.add_column("Protocol", style="bold blue", min_width=12)
-        tr_table.add_column("Packets", justify="right", style="white")
-        tr_table.add_column("%", justify="right", style="dim")
-        
-        sorted_tr = sorted(transport_counts.items(), key=lambda x: x[1], reverse=True)
-        for proto, count in sorted_tr:
-            pct = (count / total_packets * 100) if total_packets > 0 else 0
-            tr_table.add_row(proto, f"{count:,}", f"{pct:.1f}%")
-        console.print(tr_table)
+        console.print(proto_table)
 
 
 def print_recent_table(packets):

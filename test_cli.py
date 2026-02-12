@@ -272,8 +272,6 @@ else:
 section("9. CAPTURE COMMANDS — No Active Capture")
 
 run_cmd(shell, "capture", expect_in="Usage")
-run_cmd(shell, "capture status", expect_in="No capture running")
-run_cmd(shell, "capture stop", expect_in="No capture running")
 run_cmd(shell, "capture blah", expect_in="Unknown", label="capture blah (invalid subcommand)")
 
 
@@ -330,9 +328,9 @@ def test_completion(shell, method, text, line, expected_items, label):
         BUGS.append(msg)
         print(f"  ✗ {label} CRASHED: {e}")
 
-test_completion(shell, shell.complete_capture, "", "capture ", ["start", "stop", "status"], "capture <TAB>")
-test_completion(shell, shell.complete_capture, "st", "capture st", ["start", "stop", "status"], "capture st<TAB>")
-test_completion(shell, shell.complete_capture, "sta", "capture sta", ["start", "status"], "capture sta<TAB>")
+test_completion(shell, shell.complete_capture, "", "capture ", ["start"], "capture <TAB>")
+test_completion(shell, shell.complete_capture, "st", "capture st", ["start"], "capture st<TAB>")
+test_completion(shell, shell.complete_capture, "sta", "capture sta", ["start"], "capture sta<TAB>")
 test_completion(shell, shell.complete_show, "", "show ", ["stats", "recent", "top-talkers", "interfaces", "config"], "show <TAB>")
 test_completion(shell, shell.complete_show, "s", "show s", ["stats"], "show s<TAB>")
 test_completion(shell, shell.complete_search, "", "search ", ["ip", "proto", "port"], "search <TAB>")

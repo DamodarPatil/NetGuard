@@ -141,36 +141,34 @@ class NetGuardShell(cmd.Cmd):
     # ── CAPTURE COMMANDS ────────────────────────────────────────
     
     def do_capture(self, args):
-        """Start or stop packet capture.
+        """Start packet capture (Ctrl+C to stop).
         
 Usage:
-  capture start   - Start background packet capture
-  capture stop    - Stop running capture
-  capture status  - Show capture status"""
+  capture start [interface]  - Start capture (press Ctrl+C to stop)
+  capture start              - Use default interface"""
         parts = args.strip().split()
         if not parts:
-            console.print("  [dim]Usage: capture start | stop | status[/dim]")
+            console.print("  [dim]Usage: capture start [interface][/dim]")
             return
         
         subcmd = parts[0].lower()
         
         if subcmd == 'start':
+            # Optional interface override
+            if len(parts) > 1:
+                self.interface = parts[1]
             self._capture_start()
-        elif subcmd == 'stop':
-            self._capture_stop()
-        elif subcmd == 'status':
-            self._capture_status()
         else:
-            console.print(f"  [red]Unknown: capture {subcmd}[/red]. Use: start, stop, status")
+            console.print(f"  [red]Unknown: capture {subcmd}[/red]. Use: capture start")
     
     def complete_capture(self, text, line, begidx, endidx):
-        options = ['start', 'stop', 'status']
+        options = ['start']
         return [o for o in options if o.startswith(text)]
     
     def _capture_start(self):
-        """Start background capture."""
+        """Start capture, block until Ctrl+C, then show summary."""
         if self.capturing:
-            console.print("  [yellow]⚠ Capture already running. Use 'capture stop' first.[/yellow]")
+            console.print("  [yellow]⚠ Capture already running.[/yellow]")
             return
         
         if not self.interface:
@@ -214,14 +212,23 @@ Usage:
             )
             self.capture_thread.start()
             
-            console.print(f"  [green]✓[/green] Capture running in background (session started)")
+            console.print(f"  [green]✓[/green] Capture started. Press [bold]Ctrl+C[/bold] to stop.")
             if self.csv_file:
                 console.print(f"  [green]✓[/green] CSV logging to: {self.csv_file}")
-            console.print(f"  [dim]  Packets will appear below. Type commands anytime.[/dim]")
-            console.print(f"  [dim]  Use 'capture stop' to end capture.[/dim]")
             console.print()
             
             print_packet_header()
+            
+            # Block main thread — wait for Ctrl+C
+            import time
+            try:
+                while self.capturing and self.capture_thread.is_alive():
+                    time.sleep(0.5)
+            except KeyboardInterrupt:
+                pass
+            
+            # Stop capture cleanly
+            self._do_capture_stop()
             
         except PermissionError:
             console.print("  [red]✗ Root privileges required! Run with: sudo python3 netguard.py[/red]")
@@ -242,12 +249,9 @@ Usage:
         finally:
             self.capturing = False
     
-    def _capture_stop(self):
-        """Stop background capture."""
-        if not self.capturing and not (self.sniffer and not self.sniffer.stop_sniffing.is_set()):
-            console.print("  [dim]No capture running.[/dim]")
-            return
-        
+    def _do_capture_stop(self):
+        """Stop capture and show summary."""
+        console.print()
         console.print("  [yellow]▸[/yellow] Stopping capture...")
         
         if self.sniffer:
@@ -285,26 +289,6 @@ Usage:
         
         # Refresh DB connection to see new data
         self._init_db()
-    
-    def _capture_status(self):
-        """Show capture status."""
-        if self.capturing and self.sniffer:
-            delta = datetime.now() - self.capture_start if self.capture_start else None
-            secs = int(delta.total_seconds()) if delta else 0
-            duration = f"{secs}s" if secs < 60 else f"{secs//60}m {secs%60}s"
-            
-            rate = self.sniffer.packets_captured / secs if secs > 0 else 0
-            
-            console.print(f"  [green]● CAPTURING[/green]")
-            console.print(f"    Interface:  {self.interface}")
-            console.print(f"    Duration:   {duration}")
-            console.print(f"    Packets:    {self.sniffer.packets_captured:,}")
-            console.print(f"    Rate:       {rate:.0f} pkt/s")
-            console.print(f"    Data:       {self._format_bytes(self.sniffer.total_bytes)}")
-            if self.csv_file:
-                console.print(f"    CSV:        {self.csv_file}")
-        else:
-            console.print(f"  [dim]○ No capture running[/dim]")
     
     # ── SHOW COMMANDS ───────────────────────────────────────────
     
@@ -667,9 +651,7 @@ Usage:
         
         console.print()
         console.print("  [bold cyan]━━━ CAPTURE ━━━[/bold cyan]")
-        console.print("    [bold]capture start[/bold]          Start background packet capture")
-        console.print("    [bold]capture stop[/bold]           Stop running capture")
-        console.print("    [bold]capture status[/bold]         Show capture status")
+        console.print("    [bold]capture start[/bold]          Start packet capture [dim](Ctrl+C to stop)[/dim]")
         console.print()
         console.print("  [bold cyan]━━━ DISPLAY ━━━[/bold cyan]")
         console.print("    [bold]show stats[/bold]             Protocol breakdown & session stats")

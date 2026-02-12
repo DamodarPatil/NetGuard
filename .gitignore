@@ -12,6 +12,7 @@ ENV/
 dist/
 build/
 *.csv
+*.pcapng
 
 # Database
 *.db

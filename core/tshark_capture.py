@@ -275,7 +275,7 @@ class TsharkCapture:
             info_clean = '[TCP segment of a reassembled PDU]'
 
         # Normalize arrow: tshark -i - uses → but Wireshark GUI uses  >  
-        info_clean = info_clean.replace('\u2192', '>')
+        info_clean = info_clean.replace('\u2192', '→')
 
         return {
             'packet_id': packet_id,
@@ -381,8 +381,7 @@ class TsharkCapture:
             self.transport_counts[transport] = self.transport_counts.get(transport, 0) + 1
 
             application = data['application_protocol']
-            if application != transport:
-                self.application_counts[application] = self.application_counts.get(application, 0) + 1
+            self.application_counts[application] = self.application_counts.get(application, 0) + 1
 
             direction = data['direction']
             if direction in self.direction_counts:
