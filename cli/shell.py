@@ -46,11 +46,14 @@ class NetGuardShell(cmd.Cmd):
         self.capture_thread = None
         self.capturing = False
         self.capture_start = None
+        self._stopping = False  # Instant Ctrl+C kill switch
         
         # Display state
         self.live_display = True  # Show packets in real-time
         self.packet_buffer = []  # Recent packets for display
         self.max_buffer = 100
+        self._display_batch = []  # Batched lines for efficient terminal output
+        self._batch_lock = threading.Lock()
         
         # Initialize database for stats
         self._db = None
@@ -129,14 +132,46 @@ class NetGuardShell(cmd.Cmd):
     # ── Packet callback for background capture ──────────────────
     
     def _on_packet(self, data):
-        """Called for each captured packet. Runs in worker thread."""
+        """Called for each captured packet. Runs in capture thread.
+        
+        PERFORMANCE CRITICAL: Only append raw data here — no formatting.
+        format_packet_line() takes ~50μs per packet which blocks the
+        tshark pipe at high rates. Formatting happens in _flush_display()
+        on the main thread instead.
+        """
+        # Instant stop: don't queue after Ctrl+C
+        if self._stopping:
+            return
+        
         self.packet_buffer.append(data)
         if len(self.packet_buffer) > self.max_buffer:
             self.packet_buffer.pop(0)
         
         if self.live_display:
-            line = format_packet_line(data)
-            console.print(line, highlight=False)
+            with self._batch_lock:
+                self._display_batch.append(data)
+    
+    def _flush_display(self):
+        """Format and flush batched packets to terminal in one write."""
+        with self._batch_lock:
+            batch = self._display_batch[:]
+            self._display_batch.clear()
+        
+        if batch:
+            import io, sys
+            buf = io.StringIO()
+            # force_terminal=True preserves ANSI color codes in buffer
+            temp_console = Console(
+                file=buf, emoji=False, highlight=False,
+                force_terminal=True, width=console.width
+            )
+            for data in batch:
+                line = format_packet_line(data)
+                temp_console.print(line, highlight=False)
+            output = buf.getvalue()
+            if output:
+                sys.stdout.write(output)
+                sys.stdout.flush()
     
     # ── CAPTURE COMMANDS ────────────────────────────────────────
     
@@ -203,6 +238,8 @@ Usage:
             self.capturing = True
             self.capture_start = datetime.now()
             self.packet_buffer.clear()
+            self._stopping = False
+            self._display_batch.clear()
             
             # Start capture in background thread
             self.capture_thread = threading.Thread(
@@ -219,13 +256,26 @@ Usage:
             
             print_packet_header()
             
-            # Block main thread — wait for Ctrl+C
-            import time
+            # Block main thread — flush display + live status
+            import time, sys
+            status_interval = 0.5  # Update status line every 500ms
+            last_status = 0
             try:
                 while self.capturing and self.capture_thread.is_alive():
-                    time.sleep(0.5)
+                    self._flush_display()
+                    now = time.time()
+                    if now - last_status >= status_interval and self.sniffer:
+                        self._print_status_line()
+                        last_status = now
+                    time.sleep(0.05)  # 50ms — smooth display, responsive Ctrl+C
             except KeyboardInterrupt:
-                pass
+                # Instant stop: kill display output immediately
+                self._stopping = True
+                with self._batch_lock:
+                    self._display_batch.clear()
+                # Clear the status line
+                sys.stdout.write('\r' + ' ' * 100 + '\r')
+                sys.stdout.flush()
             
             # Stop capture cleanly
             self._do_capture_stop()
@@ -249,8 +299,31 @@ Usage:
         finally:
             self.capturing = False
     
+    def _print_status_line(self):
+        """Print a live status line showing captured vs displayed counts."""
+        import sys
+        sniffer = self.sniffer
+        if not sniffer:
+            return
+        
+        pcap_count = sniffer.pcap_packets_captured
+        displayed = sniffer.packets_captured
+        
+        if pcap_count > 0:
+            elapsed = ""
+            if self.capture_start:
+                delta = datetime.now() - self.capture_start
+                secs = int(delta.total_seconds())
+                elapsed = f"{secs}s" if secs < 60 else f"{secs//60}m {secs%60}s"
+            
+            pcap_mb = sniffer.pcap_total_bytes / (1024 * 1024) if sniffer.pcap_total_bytes else 0
+            status = f"\r  \033[36m⚡ {pcap_count:,} captured\033[0m | {displayed:,} displayed | {pcap_mb:.1f} MB | {elapsed}  "
+            sys.stdout.write(status)
+            sys.stdout.flush()
+    
     def _do_capture_stop(self):
-        """Stop capture and show summary."""
+        """Stop capture and reprocess pcapng for accurate stats."""
+        import sys
         console.print()
         console.print("  [yellow]▸[/yellow] Stopping capture...")
         
@@ -260,26 +333,53 @@ Usage:
         if self.capture_thread and self.capture_thread.is_alive():
             self.capture_thread.join(timeout=5)
         
-        # Show summary
-        if self.sniffer and self.sniffer.packets_captured > 0:
-            duration = ""
-            if self.capture_start:
-                delta = datetime.now() - self.capture_start
-                secs = int(delta.total_seconds())
-                duration = f"{secs}s" if secs < 60 else f"{secs//60}m {secs%60}s"
+        duration = ""
+        if self.capture_start:
+            delta = datetime.now() - self.capture_start
+            secs = int(delta.total_seconds())
+            duration = f"{secs}s" if secs < 60 else f"{secs//60}m {secs%60}s"
+        
+        if self.sniffer and self.sniffer.pcap_file:
+            pcap_count = self.sniffer.pcap_packets_captured
+            console.print(f"  [green]✓[/green] Capture saved: [bold]{self.sniffer.pcap_file}[/bold]")
             
-            console.print()
-            console.print(f"  [green]✓[/green] Capture stopped. [bold]{self.sniffer.packets_captured:,}[/bold] packets in {duration}")
+            if pcap_count > 0:
+                console.print(f"  [yellow]▸[/yellow] Analyzing complete capture ({pcap_count:,} packets)...")
+                
+                # Progress callback for reprocessing
+                last_pct = [0]
+                def on_progress(done, total):
+                    if total > 0:
+                        pct = int(done * 100 / total)
+                        if pct > last_pct[0]:
+                            last_pct[0] = pct
+                            bar_len = 40
+                            filled = int(bar_len * pct / 100)
+                            bar = '█' * filled + '░' * (bar_len - filled)
+                            sys.stdout.write(f'\r    {bar} {pct}%  ({done:,} / {total:,})  ')
+                            sys.stdout.flush()
+                
+                # Reprocess the complete pcapng file
+                self.sniffer.reprocess(on_progress=on_progress)
+                
+                # Clear progress line
+                sys.stdout.write('\r' + ' ' * 80 + '\r')
+                sys.stdout.flush()
+                
+                console.print(f"  [green]✓[/green] [bold]{self.sniffer.packets_captured:,}[/bold] packets analyzed in {duration}")
+            else:
+                console.print(f"  [green]✓[/green] Capture stopped. [bold]{self.sniffer.packets_captured:,}[/bold] packets in {duration}")
             
-            # Show quick stats
-            print_stats_table(
-                self.sniffer.transport_counts,
-                self.sniffer.application_counts,
-                self.sniffer.direction_counts,
-                self.sniffer.packets_captured,
-                self.sniffer.total_bytes,
-                duration
-            )
+            # Show stats from reprocessed data (accurate)
+            if self.sniffer.packets_captured > 0:
+                print_stats_table(
+                    self.sniffer.transport_counts,
+                    self.sniffer.application_counts,
+                    self.sniffer.direction_counts,
+                    self.sniffer.packets_captured,
+                    self.sniffer.total_bytes,
+                    duration
+                )
         else:
             console.print("  [green]✓[/green] Capture stopped.")
         
