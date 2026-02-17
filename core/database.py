@@ -321,7 +321,7 @@ class NetGuardDatabase:
             SELECT absolute_timestamp, src_ip, dst_ip, 
                    application_protocol, packet_length, info
             FROM packets
-            WHERE transport_protocol = ? OR application_protocol = ?
+            WHERE UPPER(transport_protocol) = UPPER(?) OR UPPER(application_protocol) = UPPER(?)
             ORDER BY absolute_timestamp DESC
             LIMIT 1000
         """, (protocol, protocol))

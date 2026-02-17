@@ -273,8 +273,8 @@ Usage:
                 self._stopping = True
                 with self._batch_lock:
                     self._display_batch.clear()
-                # Clear the status line
-                sys.stdout.write('\r' + ' ' * 100 + '\r')
+                # Reset terminal title
+                sys.stdout.write('\033]0;\007')
                 sys.stdout.flush()
             
             # Stop capture cleanly
@@ -300,7 +300,7 @@ Usage:
             self.capturing = False
     
     def _print_status_line(self):
-        """Print a live status line showing captured vs displayed counts."""
+        """Show live capture stats in the terminal title bar (no clutter)."""
         import sys
         sniffer = self.sniffer
         if not sniffer:
@@ -309,17 +309,22 @@ Usage:
         pcap_count = sniffer.pcap_packets_captured
         displayed = sniffer.packets_captured
         
+        elapsed = ""
+        if self.capture_start:
+            delta = datetime.now() - self.capture_start
+            secs = int(delta.total_seconds())
+            elapsed = f"{secs}s" if secs < 60 else f"{secs//60}m {secs%60}s"
+        
+        pcap_mb = sniffer.pcap_total_bytes / (1024 * 1024) if sniffer.pcap_total_bytes else 0
+        
         if pcap_count > 0:
-            elapsed = ""
-            if self.capture_start:
-                delta = datetime.now() - self.capture_start
-                secs = int(delta.total_seconds())
-                elapsed = f"{secs}s" if secs < 60 else f"{secs//60}m {secs%60}s"
-            
-            pcap_mb = sniffer.pcap_total_bytes / (1024 * 1024) if sniffer.pcap_total_bytes else 0
-            status = f"\r  \033[36m⚡ {pcap_count:,} captured\033[0m | {displayed:,} displayed | {pcap_mb:.1f} MB | {elapsed}  "
-            sys.stdout.write(status)
-            sys.stdout.flush()
+            title = f"⚡ NetGuard | {pcap_count:,} captured | {displayed:,} displayed | {pcap_mb:.1f} MB | {elapsed}"
+        else:
+            title = f"⚡ NetGuard | {displayed:,} packets | {pcap_mb:.1f} MB | {elapsed}"
+        
+        # Set terminal title bar (ANSI escape — works in all modern terminals)
+        sys.stdout.write(f"\033]0;{title}\007")
+        sys.stdout.flush()
     
     def _do_capture_stop(self):
         """Stop capture and reprocess pcapng for accurate stats."""
@@ -569,8 +574,8 @@ Usage:
             results = self._db.search_by_ip(value)
             print_search_results(results, f"IP={value}")
         elif subcmd in ('proto', 'protocol'):
-            console.print(f"  [bold]Searching for protocol: {value.upper()}[/bold]")
-            results = self._db.search_by_protocol(value.upper())
+            console.print(f"  [bold]Searching for protocol: {value}[/bold]")
+            results = self._db.search_by_protocol(value)
             print_search_results(results, f"Protocol={value}")
         elif subcmd == 'port':
             try:
