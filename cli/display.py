@@ -163,11 +163,23 @@ def print_stats_table(transport_counts, application_counts, direction_counts,
         console.print(proto_table)
 
 
+# Severity → color mapping for behavioral tags
+TAG_SEVERITY_COLORS = {
+    'critical': 'bold red',
+    'high': 'red',
+    'medium': 'yellow',
+    'low': 'dim',
+}
+
+
 def print_connections_table(connections):
     """Print connections/flows as a Rich table."""
     if not connections:
         console.print("  [dim]No connections in database.[/dim]")
         return
+
+    # Check if any connection has tags
+    has_tags = any(len(c) >= 13 and c[12] for c in connections)
 
     table = Table(title=f"Network Connections ({len(connections)} flows)", border_style="cyan")
     table.add_column("#", style="dim", width=4)
@@ -179,10 +191,15 @@ def print_connections_table(connections):
     table.add_column("Bytes", justify="right", width=10)
     table.add_column("Duration", justify="right", width=8)
     table.add_column("State", width=8)
+    if has_tags:
+        table.add_column("Tags", width=18)
 
     for i, conn in enumerate(connections, 1):
+        # Unpack — handle both 12-field (legacy) and 14-field (with tags) tuples
         src_ip, dst_ip, src_port, dst_port, protocol, direction, \
-            start_time, end_time, duration, total_packets, total_bytes, state = conn
+            start_time, end_time, duration, total_packets, total_bytes, state = conn[:12]
+        tags = conn[12] if len(conn) > 12 else ''
+        severity = conn[13] if len(conn) > 13 else ''
 
         color = PROTO_COLORS.get(protocol, 'white')
 
@@ -203,7 +220,7 @@ def print_connections_table(connections):
         # State color
         state_style = "green" if state == "ESTABLISHED" else "yellow" if state == "ACTIVE" else "red" if state in ("RST", "FIN") else "dim"
 
-        table.add_row(
+        row = [
             str(i),
             src_display,
             dst_display,
@@ -213,7 +230,16 @@ def print_connections_table(connections):
             _format_bytes(total_bytes),
             dur_str,
             f"[{state_style}]{state}[/]",
-        )
+        ]
+
+        if has_tags:
+            if tags:
+                tag_color = TAG_SEVERITY_COLORS.get(severity, 'dim')
+                row.append(f"[{tag_color}]{tags}[/]")
+            else:
+                row.append("")
+
+        table.add_row(*row)
 
     console.print(table)
 
@@ -250,6 +276,47 @@ def print_search_results(connections, search_type=""):
     
     console.print(f"  [green]Found {len(connections)} connection(s)[/green]")
     print_connections_table(connections)
+
+
+def print_tag_summary(summary):
+    """Print behavioral tag summary table."""
+    if not summary or summary.get('total_tagged', 0) == 0:
+        console.print("  [dim]No behavioral tags detected yet.[/dim]")
+        console.print("  [dim]Tags are generated during packet capture.[/dim]")
+        return
+
+    # Severity overview
+    sev_table = Table(title="Behavioral Tags Summary", border_style="yellow")
+    sev_table.add_column("Severity", style="bold", width=12)
+    sev_table.add_column("Count", justify="right", width=8)
+    
+    for sev in ['critical', 'high', 'medium', 'low']:
+        count = summary['severity_counts'].get(sev, 0)
+        if count > 0:
+            color = TAG_SEVERITY_COLORS.get(sev, 'white')
+            sev_table.add_row(f"[{color}]{sev.upper()}[/]", f"{count:,}")
+
+    sev_table.add_row("[bold]TOTAL[/]", f"[bold]{summary['total_tagged']:,}[/]")
+    console.print(sev_table)
+
+    # Tag breakdown
+    if summary.get('tag_counts'):
+        tag_table = Table(title="Tags Breakdown", border_style="cyan")
+        tag_table.add_column("Tag", style="bold yellow", width=18)
+        tag_table.add_column("Connections", justify="right", width=12)
+
+        tag_names = {
+            'beaconing': '⏱  beaconing',
+            'data_exfil': '📤 data_exfil',
+            'new_dest': '🆕 new_dest',
+            'traffic_anomaly': '📈 traffic_anomaly',
+        }
+
+        for tag, count in sorted(summary['tag_counts'].items(), key=lambda x: x[1], reverse=True):
+            display = tag_names.get(tag, tag)
+            tag_table.add_row(display, f"{count:,}")
+
+        console.print(tag_table)
 
 
 def _format_bytes(bytes_value):

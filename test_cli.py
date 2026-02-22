@@ -147,9 +147,11 @@ run_cmd(shell, "show", expect_in="Usage")
 run_cmd(shell, "show config", expect_in=["Interface", "Database"])
 run_cmd(shell, "show interfaces", expect_in="Available Interfaces")
 run_cmd(shell, "show stats")
-run_cmd(shell, "show recent", label="show recent (default 20)")
-run_cmd(shell, "show recent 5", label="show recent 5")
-run_cmd(shell, "show recent 1", label="show recent 1")
+run_cmd(shell, "show stats all", label="show stats all")
+run_cmd(shell, "show recent", label="show recent (latest session)")
+run_cmd(shell, "show connections", label="show connections (default 20)")
+run_cmd(shell, "show connections 5", label="show connections 5")
+run_cmd(shell, "show connections 1", label="show connections 1")
 run_cmd(shell, "show top-talkers", label="show top-talkers (default 10)")
 run_cmd(shell, "show top-talkers 3", label="show top-talkers 3")
 run_cmd(shell, "show talkers", label="show talkers (alias)")
@@ -160,15 +162,15 @@ run_cmd(shell, "show talkers", label="show talkers (alias)")
 # ═══════════════════════════════════════════════════════════
 section("3. SHOW COMMANDS — Invalid / Edge Cases")
 
-run_cmd(shell, "show recent -1", expect_in="positive", label="show recent -1 (negative)")
-run_cmd(shell, "show recent 0", expect_in="positive", label="show recent 0 (zero)")
-run_cmd(shell, "show recent abc", expect_in="Invalid", label="show recent abc (non-numeric)")
-run_cmd(shell, "show recent 99999", label="show recent 99999 (very large)")
+run_cmd(shell, "show connections -1", expect_in="positive", label="show connections -1 (negative)")
+run_cmd(shell, "show connections 0", expect_in="positive", label="show connections 0 (zero)")
+run_cmd(shell, "show connections abc", expect_in="Invalid", label="show connections abc (non-numeric)")
+run_cmd(shell, "show connections 99999", label="show connections 99999 (very large)")
 run_cmd(shell, "show top-talkers -5", expect_in="positive", label="show top-talkers -5 (negative)")
 run_cmd(shell, "show top-talkers 0", expect_in="positive", label="show top-talkers 0 (zero)")
 run_cmd(shell, "show top-talkers abc", expect_in="Invalid", label="show top-talkers abc (non-numeric)")
 run_cmd(shell, "show blah", expect_in="Unknown", label="show blah (unknown subcommand)")
-run_cmd(shell, "show recent 5 extra_args", label="show recent 5 extra_args (extra args)")
+run_cmd(shell, "show connections 5 extra_args", label="show connections 5 extra_args (extra args)")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -247,7 +249,7 @@ section("8. EXPORT COMMANDS")
 
 run_cmd(shell, "export", expect_in="Usage")
 run_cmd(shell, "export csv /tmp/netguard_test_export.csv", expect_in="Exported")
-run_cmd(shell, "export csv", expect_in="Usage", label="export csv (no file)")
+run_cmd(shell, "export csv", label="export csv (auto-name)")
 run_cmd(shell, "export json file.json", expect_in="Unknown format", label="export json (unsupported)")
 
 # Verify export file
@@ -349,6 +351,41 @@ test_completion(shell, shell.complete_set, "o", "set display o", ["on", "off"], 
 # Edge: completion with unknown prefix
 test_completion(shell, shell.complete_capture, "xyz", "capture xyz", [], "capture xyz<TAB> (no match)")
 test_completion(shell, shell.complete_set, "xyz", "set xyz", [], "set xyz<TAB> (no match)")
+
+
+# ═══════════════════════════════════════════════════════════
+#  12b. SESSION COMMANDS
+# ═══════════════════════════════════════════════════════════
+section("12b. SESSION COMMANDS")
+
+run_cmd(shell, "session", expect_in="Usage", label="session (no args)")
+run_cmd(shell, "session list", label="session list")
+run_cmd(shell, "session load 999", label="session load 999 (nonexistent)")
+run_cmd(shell, "session load abc", expect_in="Invalid", label="session load abc (non-numeric)")
+run_cmd(shell, "session delete 999", label="session delete 999 (nonexistent)")
+run_cmd(shell, "session delete abc", expect_in="Invalid", label="session delete abc (non-numeric)")
+run_cmd(shell, "session clear", label="session clear")
+run_cmd(shell, "session load 0", label="session load 0 (reset)")
+run_cmd(shell, "session blah", expect_in="Unknown", label="session blah (unknown)")
+
+# TAB completion for session
+result = shell.complete_session('', 'session ', 8, 8)
+if set(result) == {'list', 'load', 'delete', 'clear'}:
+    print(f"  ✓ session <TAB> → {result}")
+    PASS += 1
+else:
+    print(f"  ✗ session <TAB> → {result} (expected list,load,delete,clear)")
+    FAIL += 1
+    BUGS.append(f"session <TAB> completion")
+
+result2 = shell.complete_session('l', 'session l', 8, 9)
+if set(result2) == {'list', 'load'}:
+    print(f"  ✓ session l<TAB> → {result2}")
+    PASS += 1
+else:
+    print(f"  ✗ session l<TAB> → {result2} (expected list,load)")
+    FAIL += 1
+    BUGS.append(f"session l<TAB> completion")
 
 
 # ═══════════════════════════════════════════════════════════

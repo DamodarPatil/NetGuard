@@ -16,7 +16,7 @@ from rich.panel import Panel
 from cli.banner import print_banner
 from cli.display import (
     format_packet_line, print_packet_header, print_stats_table,
-    print_connections_table, print_top_talkers, print_search_results, console
+    print_connections_table, print_search_results, console
 )
 from intelligence.suricata import SuricataEngine
 from intelligence.threat_intel import ThreatIntelChecker
@@ -62,6 +62,9 @@ class NetGuardShell(cmd.Cmd):
         # Initialize database for stats
         self._db = None
         self._init_db()
+
+        # Session context (None = latest session)
+        self.current_active_session_id = None
         
         # Show banner
         db_count = self._get_db_packet_count()
@@ -432,23 +435,31 @@ Usage:
         """Show various information.
         
 Usage:
-  show stats           - Protocol breakdown & session stats
-  show connections [N] - Show top N connections/flows (default: 20)
-  show top-talkers [N] - Most active IPs (default: 10)
-  show interfaces      - Available network interfaces
-  show config          - Current configuration
-  show alerts [N]      - Show recent Suricata IDS alerts
-  show threats         - Threat summary (attackers, severity)"""
+  show stats            - Stats for active/latest session
+  show stats all        - Cumulative stats from ALL sessions
+  show connections [N]  - Show top N connections/flows (default: 10)
+  show interfaces       - Available network interfaces
+  show config           - Current configuration
+  show alerts [N]       - Show alerts for latest session
+  show alerts all       - Show alerts from ALL sessions
+  show threats          - Threat summary for latest session
+  show threats all      - Threat summary from ALL sessions"""
         parts = args.strip().split()
         if not parts:
-            console.print("  [dim]Usage: show stats | connections | top-talkers | interfaces | config | alerts | threats[/dim]")
+            console.print("  [dim]Usage: show stats [all] | connections | interfaces | config | alerts [all] | threats [all][/dim]")
             return
         
         subcmd = parts[0].lower()
         
         if subcmd == 'stats':
-            self._show_stats()
-        elif subcmd in ('recent', 'connections', 'conn', 'flows', 'flow'):
+            # show stats all → cumulative; show stats → active session or latest
+            if len(parts) > 1 and parts[1].lower() == 'all':
+                self._show_stats_all()
+            else:
+                self._show_stats()
+        elif subcmd == 'recent':
+            self._show_recent_stats()
+        elif subcmd in ('connections', 'conn', 'flows', 'flow'):
             n = 10
             if len(parts) > 1:
                 try:
@@ -459,30 +470,37 @@ Usage:
                 except ValueError:
                     console.print(f"  [red]✗ Invalid number: {parts[1]}[/red]")
                     return
-            self._show_top_talkers(n)
+            self._show_connections(n)
         elif subcmd in ('interfaces', 'iface', 'if'):
             self._show_interfaces()
         elif subcmd in ('config', 'settings'):
             self._show_config()
         elif subcmd in ('alerts', 'alert'):
+            # show alerts all → all sessions; show alerts [N] → latest session
+            show_all = False
             n = 50
             if len(parts) > 1:
-                try:
-                    n = int(parts[1])
-                except ValueError:
-                    pass
-            self._show_alerts(n)
+                if parts[1].lower() == 'all':
+                    show_all = True
+                else:
+                    try:
+                        n = int(parts[1])
+                    except ValueError:
+                        pass
+            self._show_alerts(n, all_sessions=show_all)
         elif subcmd in ('threats', 'threat'):
-            self._show_threats()
+            # show threats all → all sessions; show threats → latest session
+            show_all = len(parts) > 1 and parts[1].lower() == 'all'
+            self._show_threats(all_sessions=show_all)
         else:
             console.print(f"  [red]Unknown: show {subcmd}[/red]")
     
     def complete_show(self, text, line, begidx, endidx):
-        options = ['stats', 'connections', 'top-talkers', 'interfaces', 'config', 'alerts', 'threats']
+        options = ['stats', 'connections', 'interfaces', 'config', 'alerts', 'threats']
         return [o for o in options if o.startswith(text)]
     
     def _show_stats(self):
-        """Show stats from live capture or database."""
+        """Show stats for the active session (loaded or latest)."""
         if self.capturing and self.sniffer:
             # Show live stats
             delta = datetime.now() - self.capture_start if self.capture_start else None
@@ -500,25 +518,80 @@ Usage:
                 duration
             )
         elif self._db:
-            # Show cumulative stats from ALL sessions
-            stats = self._db.get_cumulative_stats()
-            if stats['total_packets'] > 0:
+            sid = self.current_active_session_id
+            if sid:
+                stats = self._db.get_session_stats(sid)
+                if stats is None:
+                    console.print(f"  [red]✗ Session #{sid} not found.[/red]")
+                    return
+                label = f"Session #{sid}"
+            else:
+                # Default: latest session
+                sid = self._db.get_recent_session_id()
+                if not sid:
+                    console.print("  [dim]No sessions in database.[/dim]")
+                    return
+                stats = self._db.get_session_stats(sid)
+                label = f"Latest Session (#{sid})"
+            
+            if stats and stats['total_packets'] > 0:
                 app_counts = {s[0]: s[1] for s in stats['protocol_stats']}
                 direction = stats['direction_counts']
-                console.print(f"  [dim]Showing cumulative data from {stats['session_count']} session(s)[/dim]")
+                console.print(f"  [dim]Showing data from {label}[/dim]")
                 print_stats_table(
                     {}, app_counts, direction,
                     stats['total_packets'], stats['total_bytes']
                 )
             else:
-                console.print("  [dim]No data in database.[/dim]")
+                console.print(f"  [dim]No data for {label}.[/dim]")
         else:
             console.print("  [dim]No capture running and no database available.[/dim]")
+
+    def _show_recent_stats(self):
+        """Show stats for the most recent capture session."""
+        if not self._db:
+            console.print("  [dim]Database not available.[/dim]")
+            return
+        sid = self._db.get_recent_session_id()
+        if not sid:
+            console.print("  [dim]No sessions in database.[/dim]")
+            return
+        stats = self._db.get_session_stats(sid)
+        if stats and stats['total_packets'] > 0:
+            app_counts = {s[0]: s[1] for s in stats['protocol_stats']}
+            direction = stats['direction_counts']
+            console.print(f"  [dim]Showing data from latest session (#{sid})[/dim]")
+            print_stats_table(
+                {}, app_counts, direction,
+                stats['total_packets'], stats['total_bytes']
+            )
+        else:
+            console.print(f"  [dim]No data for latest session (#{sid}).[/dim]")
+
+    def _show_stats_all(self):
+        """Show cumulative stats from ALL sessions."""
+        if not self._db:
+            console.print("  [dim]Database not available.[/dim]")
+            return
+        stats = self._db.get_cumulative_stats()
+        if stats['total_packets'] > 0:
+            app_counts = {s[0]: s[1] for s in stats['protocol_stats']}
+            direction = stats['direction_counts']
+            console.print(f"  [dim]Showing cumulative data from {stats['session_count']} session(s)[/dim]")
+            print_stats_table(
+                {}, app_counts, direction,
+                stats['total_packets'], stats['total_bytes']
+            )
+        else:
+            console.print("  [dim]No data in database.[/dim]")
     
     def _show_connections(self, limit=20):
         """Show connections/flows."""
         if self._db:
-            connections = self._db.get_connections(limit)
+            sid = self.current_active_session_id
+            if sid:
+                console.print(f"  [dim]Showing connections for session #{sid}[/dim]")
+            connections = self._db.get_connections(limit, session_id=sid)
             if connections:
                 print_connections_table(connections)
             else:
@@ -526,16 +599,6 @@ Usage:
         else:
             console.print("  [dim]Database not available.[/dim]")
     
-    def _show_top_talkers(self, limit=10):
-        """Show top talkers."""
-        if self._db:
-            talkers = self._db.get_top_talkers(limit)
-            if talkers:
-                print_top_talkers(talkers)
-            else:
-                console.print("  [dim]No data available.[/dim]")
-        else:
-            console.print("  [dim]Database not available.[/dim]")
     
     def _show_interfaces(self):
         """Show available network interfaces."""
@@ -582,15 +645,30 @@ Usage:
         status = "[green]● running[/green]" if self.capturing else "[dim]○ stopped[/dim]"
         console.print(f"    Capture:     {status}")
 
-    def _show_alerts(self, limit=50):
-        """Show recent Suricata IDS alerts."""
+    def _show_alerts(self, limit=50, all_sessions=False):
+        """Show Suricata IDS alerts (latest session by default, all if requested)."""
         self._init_db()
         if not self._db:
             return
 
-        alerts = self._db.get_alerts(limit)
+        # Determine session scope
+        if all_sessions:
+            sid = None
+            console.print("  [dim]Showing alerts from all sessions[/dim]")
+        elif self.current_active_session_id:
+            sid = self.current_active_session_id
+            console.print(f"  [dim]Showing alerts for session #{sid}[/dim]")
+        else:
+            # Default: latest session
+            sid = self._db.get_recent_session_id()
+            if not sid:
+                console.print("  [dim]No sessions in database.[/dim]")
+                return
+            console.print(f"  [dim]Showing alerts for latest session (#{sid})[/dim]")
+
+        alerts = self._db.get_alerts(limit, session_id=sid)
         if not alerts:
-            console.print("  [dim]No alerts found. Run a capture with Suricata to detect threats.[/dim]")
+            console.print("  [dim]No alerts detected in this session.[/dim]")
             return
 
         table = Table(title=f"🔴 Suricata IDS Alerts (last {len(alerts)})",
@@ -627,15 +705,31 @@ Usage:
 
         console.print(table)
 
-    def _show_threats(self):
-        """Show threat summary from Suricata alerts."""
+
+    def _show_threats(self, all_sessions=False):
+        """Show threat summary from Suricata alerts (latest session by default)."""
         self._init_db()
         if not self._db:
             return
 
-        summary = self._db.get_threat_summary()
+        # Determine session scope
+        if all_sessions:
+            sid = None
+            console.print("  [dim]Showing threats from all sessions[/dim]")
+        elif self.current_active_session_id:
+            sid = self.current_active_session_id
+            console.print(f"  [dim]Showing threats for session #{sid}[/dim]")
+        else:
+            # Default: latest session
+            sid = self._db.get_recent_session_id()
+            if not sid:
+                console.print("  [dim]No sessions in database.[/dim]")
+                return
+            console.print(f"  [dim]Showing threats for latest session (#{sid})[/dim]")
+
+        summary = self._db.get_threat_summary(session_id=sid)
         if summary['total'] == 0:
-            console.print("  [dim]No threats detected yet. Run a capture to analyze traffic.[/dim]")
+            console.print("  [dim]No threats detected in this session.[/dim]")
             return
 
         # Header
@@ -668,7 +762,145 @@ Usage:
                 console.print(f"    • {sig_display} — [yellow]{count}x[/yellow]")
 
         console.print()
+
+    # ── SESSION COMMANDS ─────────────────────────────────────────
+
+    def do_session(self, args):
+        """Manage capture session history.
     
+Usage:
+  session list             List all past capture sessions
+  session load <ID>        Load a session — filters all commands to that session
+  session load 0           Unload session — resets to show all data (default)
+  session delete <ID>      Delete a specific session & its data
+  session clear            Wipe all session history
+
+Session-Aware Commands:
+  When a session is loaded, these commands show data only from that session:
+    show connections, show top-talkers, show alerts, show threats,
+    search ip/proto/port/tag, export csv
+  When no session is loaded (default), all commands show data from all sessions."""
+        parts = args.strip().split()
+        if not parts:
+            console.print("  [dim]Usage: session list | load <ID> | delete <ID> | clear[/dim]")
+            return
+
+        subcmd = parts[0].lower()
+
+        if subcmd not in ('list', 'load', 'delete', 'clear'):
+            console.print(f"  [red]Unknown: session {subcmd}[/red]. Use: list, load, delete, clear")
+            return
+
+        # Validate ID argument for load/delete
+        sid = None
+        if subcmd in ('load', 'delete'):
+            if len(parts) < 2:
+                console.print(f"  [dim]Usage: session {subcmd} <ID>[/dim]")
+                return
+            try:
+                sid = int(parts[1])
+            except ValueError:
+                console.print(f"  [red]✗ Invalid session ID: {parts[1]}[/red]")
+                return
+
+        if not self._db:
+            console.print("  [red]Database not available.[/red]")
+            return
+
+        if subcmd == 'list':
+            self._session_list()
+        elif subcmd == 'load':
+            self._session_load(sid)
+        elif subcmd == 'delete':
+            self._session_delete(sid)
+        elif subcmd == 'clear':
+            self._session_clear()
+
+    def complete_session(self, text, line, begidx, endidx):
+        options = ['list', 'load', 'delete', 'clear']
+        return [o for o in options if o.startswith(text)]
+
+    def _session_list(self):
+        """List all capture sessions."""
+        sessions = self._db.get_all_sessions()
+        if not sessions:
+            console.print("  [dim]No capture sessions found.[/dim]")
+            return
+
+        table = Table(title=f"📁 Capture Sessions ({len(sessions)})", border_style="cyan")
+        table.add_column("ID", style="bold cyan", width=5)
+        table.add_column("Date/Time", width=20)
+        table.add_column("Packets", justify="right", width=10)
+        table.add_column("Bytes", justify="right", width=10)
+        table.add_column("Alerts", justify="right", width=7)
+        table.add_column("Interface", width=10)
+        table.add_column("PCAP File", width=30)
+
+        for sid, start, end, pkts, bts, iface, pcap, alerts in sessions:
+            # Format start time
+            ts_display = str(start)[:19] if start else '-'
+            # Format bytes
+            bytes_display = self._format_bytes(bts) if bts else '0 B'
+            # Active session marker
+            id_display = f"#{sid}"
+            if sid == self.current_active_session_id:
+                id_display += " ◀"
+            # PCAP file basename
+            pcap_display = os.path.basename(pcap) if pcap else '-'
+
+            table.add_row(
+                id_display,
+                ts_display,
+                f"{pkts:,}" if pkts else "0",
+                bytes_display,
+                str(alerts),
+                iface or '-',
+                pcap_display,
+            )
+
+        console.print(table)
+        if self.current_active_session_id:
+            console.print(f"  [dim]Active context: Session #{self.current_active_session_id}[/dim]")
+        else:
+            console.print("  [dim]No session loaded (showing latest by default)[/dim]")
+
+    def _session_load(self, session_id):
+        """Load a specific session as the active context."""
+        # Special case: 0 resets to latest-session-by-default
+        if session_id == 0:
+            self.current_active_session_id = None
+            console.print("  [green]✓[/green] Reset to [bold]latest session[/bold] (no specific session loaded)")
+            return
+        # Verify session exists
+        stats = self._db.get_session_stats(session_id)
+        if stats is None:
+            console.print(f"  [red]✗ Session #{session_id} not found.[/red]")
+            return
+        self.current_active_session_id = session_id
+        console.print(f"  [green]✓[/green] Switched context to [bold]Session #{session_id}[/bold]")
+        console.print(f"  [dim]  show/search commands now filter by this session. Use 'session load 0' to reset.[/dim]")
+
+    def _session_delete(self, session_id):
+        """Delete a session and all its data."""
+        deleted = self._db.delete_session(session_id)
+        if deleted:
+            console.print(f"  [green]✓[/green] Deleted Session #{session_id} and all related data.")
+            # Reset active session if it was the one deleted
+            if self.current_active_session_id == session_id:
+                self.current_active_session_id = None
+                console.print("  [dim]  Active session reset to latest.[/dim]")
+        else:
+            console.print(f"  [red]✗ Session #{session_id} not found.[/red]")
+
+    def _session_clear(self):
+        """Wipe all session history."""
+        count = self._db.clear_all_sessions()
+        if count < 0:
+            console.print("  [red]✗ Cannot clear sessions (database may be read-only).[/red]")
+            return
+        self.current_active_session_id = None
+        console.print(f"  [green]✓[/green] Cleared [bold]{count}[/bold] session(s) and all related data.")
+
     # ── SEARCH COMMANDS ─────────────────────────────────────────
     
     def do_search(self, args):
@@ -684,22 +916,17 @@ Usage:
             console.print("  [dim]Usage: search ip <IP> | proto <PROTO> | port <PORT> | threat <IP>[/dim]")
             return
         
-        if not self._db:
-            console.print("  [red]Database not available.[/red]")
-            return
-        
         subcmd = parts[0].lower()
         value = parts[1]
-        
-        if subcmd == 'ip':
-            console.print(f"  [bold]Searching for IP: {value}[/bold]")
-            results = self._db.search_by_ip(value)
-            print_search_results(results, f"IP={value}")
-        elif subcmd in ('proto', 'protocol'):
-            console.print(f"  [bold]Searching for protocol: {value}[/bold]")
-            results = self._db.search_by_protocol(value)
-            print_search_results(results, f"Protocol={value}")
-        elif subcmd == 'port':
+
+        # Validate arguments BEFORE checking DB
+        if subcmd not in ('ip', 'proto', 'protocol', 'port', 'threat'):
+            console.print(f"  [red]Unknown: search {subcmd}[/red]. Use: ip, proto, port, threat")
+            return
+
+        # Validate port number early
+        port_num = None
+        if subcmd == 'port':
             try:
                 port_num = int(value)
                 if port_num < 0 or port_num > 65535:
@@ -708,13 +935,28 @@ Usage:
             except ValueError:
                 console.print(f"  [red]✗ Invalid port number: {value}[/red]")
                 return
-            console.print(f"  [bold]Searching for port: {port_num}[/bold]")
-            results = self._db.search_by_port(port_num)
+
+        if not self._db:
+            console.print("  [red]Database not available.[/red]")
+            return
+
+        sid = self.current_active_session_id
+        ctx = f" (session #{sid})" if sid else ""
+
+        if subcmd == 'ip':
+            console.print(f"  [bold]Searching for IP: {value}{ctx}[/bold]")
+            results = self._db.search_by_ip(value, session_id=sid)
+            print_search_results(results, f"IP={value}")
+        elif subcmd in ('proto', 'protocol'):
+            console.print(f"  [bold]Searching for protocol: {value}{ctx}[/bold]")
+            results = self._db.search_by_protocol(value, session_id=sid)
+            print_search_results(results, f"Protocol={value}")
+        elif subcmd == 'port':
+            console.print(f"  [bold]Searching for port: {port_num}{ctx}[/bold]")
+            results = self._db.search_by_port(port_num, session_id=sid)
             print_search_results(results, f"Port={port_num}")
         elif subcmd == 'threat':
             self._search_threat(value)
-        else:
-            console.print(f"  [red]Unknown: search {subcmd}[/red]. Use: ip, proto, port, threat")
     
     def complete_search(self, text, line, begidx, endidx):
         options = ['ip', 'proto', 'port', 'threat']
@@ -857,25 +1099,31 @@ Usage:
             console.print("  [dim]Usage: export csv [filename][/dim]")
             return
         
-        if parts[0].lower() == 'csv':
-            if len(parts) >= 2:
-                filename = parts[1]
-            else:
-                # Auto-generate filename with timestamp
-                filename = f"netguard_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            # Auto-append .csv if not present
-            if not filename.lower().endswith('.csv'):
-                filename += '.csv'
-            if self._db:
-                try:
-                    count = self._db.export_to_csv(filename)
-                    console.print(f"  [green]✓[/green] Exported [bold]{count:,}[/bold] connections to [bold]{filename}[/bold]")
-                except Exception as e:
-                    console.print(f"  [red]✗ Export failed: {e}[/red]")
-            else:
-                console.print("  [red]Database not available.[/red]")
-        else:
+        fmt = parts[0].lower()
+        if fmt != 'csv':
             console.print(f"  [red]Unknown format: {parts[0]}[/red]. Use: csv")
+            return
+
+        if len(parts) >= 2:
+            filename = parts[1]
+        else:
+            # Auto-generate filename with timestamp
+            filename = f"netguard_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Auto-append .csv if not present
+        if not filename.lower().endswith('.csv'):
+            filename += '.csv'
+
+        if not self._db:
+            console.print("  [red]Database not available.[/red]")
+            return
+
+        try:
+            sid = self.current_active_session_id
+            count = self._db.export_to_csv(filename, session_id=sid)
+            ctx = f" from session #{sid}" if sid else ""
+            console.print(f"  [green]✓[/green] Exported [bold]{count:,}[/bold] connections{ctx} to [bold]{filename}[/bold]")
+        except Exception as e:
+            console.print(f"  [red]✗ Export failed: {e}[/red]")
     
     def complete_export(self, text, line, begidx, endidx):
         return [o for o in ['csv'] if o.startswith(text)]
@@ -917,13 +1165,21 @@ Usage:
         console.print("    [bold]capture start[/bold]          Start packet capture [dim](Ctrl+C to stop)[/dim]")
         console.print()
         console.print("  [bold cyan]━━━ DISPLAY ━━━[/bold cyan]")
-        console.print("    [bold]show stats[/bold]             Protocol breakdown & session stats")
-        console.print("    [bold]show connections[/bold] [dim][N][/dim]   Show top N connections/flows [dim](default: 20)[/dim]")
-        console.print("    [bold]show top-talkers[/bold] [dim][N][/dim]   Most active IPs [dim](default: 10)[/dim]")
+        console.print("    [bold]show stats[/bold]              Stats for the loaded session [dim](or latest)[/dim]")
+        console.print("    [bold]show stats all[/bold]          Cumulative stats from ALL sessions")
+        console.print("    [bold]show connections[/bold] [dim][N][/dim]   Show top N connections/flows [dim](default: 10)[/dim]")
         console.print("    [bold]show interfaces[/bold]        Available network interfaces")
         console.print("    [bold]show config[/bold]            Current configuration")
-        console.print("    [bold]show alerts[/bold] [dim][N][/dim]        Recent Suricata IDS alerts")
-        console.print("    [bold]show threats[/bold]           Threat summary [dim](attackers, severity)[/dim]")
+        console.print("    [bold]show alerts[/bold] [dim][N][/dim]        Suricata IDS alerts [dim](latest session)[/dim]")
+        console.print("    [bold]show alerts all[/bold]        Alerts from ALL sessions")
+        console.print("    [bold]show threats[/bold]           Threat summary [dim](latest session)[/dim]")
+        console.print("    [bold]show threats all[/bold]       Threat summary from ALL sessions")
+        console.print()
+        console.print("  [bold cyan]━━━ HISTORY ━━━[/bold cyan]")
+        console.print("    [bold]session list[/bold]            List all past capture sessions")
+        console.print("    [bold]session load[/bold] [dim]<ID>[/dim]      Load a session to view/search")
+        console.print("    [bold]session delete[/bold] [dim]<ID>[/dim]    Delete a session & its data")
+        console.print("    [bold]session clear[/bold]           Wipe all session history")
         console.print()
         console.print("  [bold cyan]━━━ SEARCH ━━━[/bold cyan]")
         console.print("    [bold]search ip[/bold] [dim]<IP>[/dim]         Find connections by IP address")

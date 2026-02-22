@@ -23,6 +23,7 @@ from datetime import datetime
 
 from core.database import NetGuardDatabase
 from core.connection_tracker import ConnectionTracker
+from core.behavior_engine import BehaviorEngine
 from intelligence.suricata import SuricataEngine
 
 
@@ -104,6 +105,9 @@ class TsharkCapture:
 
         # Connection/flow tracker (replaces per-packet DB storage)
         self._tracker = ConnectionTracker()
+
+        # Behavioral tagging engine (complements Suricata)
+        self._behavior_engine = BehaviorEngine(db=self._db)
 
         # Suricata IDS engine (Process 3)
         self._suricata = None
@@ -437,7 +441,7 @@ class TsharkCapture:
 
         # Clear DB and tracker for clean rebuild from pcapng
         self._tracker.reset()
-        self._db.clear_connections()
+        self._db.clear_session_connections(self.session_id)
 
         # Reset CSV if active
         if self._csv_fh:
@@ -620,10 +624,24 @@ class TsharkCapture:
         self._flush_tracker()
 
     def _flush_tracker(self):
-        """Flush connection tracker flows to the database."""
+        """Flush connection tracker flows to the database with behavioral tags."""
         flows = self._tracker.get_flows()
         if flows:
+            # Run behavioral analysis and attach tags to flows
+            tags_map = self._behavior_engine.analyze(flows)
+            for i, flow in enumerate(flows):
+                if i in tags_map:
+                    tag_list = tags_map[i]
+                    flow['tags'] = ','.join(t[0] for t in tag_list)
+                    # Use highest severity
+                    sev_order = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1}
+                    flow['severity'] = max(
+                        (t[1] for t in tag_list),
+                        key=lambda s: sev_order.get(s, 0)
+                    )
             self._db.flush_connections(flows, self.session_id)
+            # Update known destinations for future new_dest / anomaly detection
+            self._db.update_known_destinations(flows)
 
     def _flush_protocol_stats(self):
         """Update protocol_stats table from current in-memory counts."""
@@ -701,7 +719,7 @@ class TsharkCapture:
             tshark_cmd.extend(['-e', field])
 
         # Start database session
-        self.session_id = self._db.start_session(iface)
+        self.session_id = self._db.start_session(iface, self.pcap_file)
 
         try:
             # Launch dumpcap — writes to file in pure C (zero-drop guaranteed)
