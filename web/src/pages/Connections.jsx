@@ -102,6 +102,7 @@ const Connections = () => {
     // Filters
     const [search, setSearch] = useState('')
     const [proto, setProto] = useState('')
+    const [port, setPort] = useState('')
     const [tag, setTag] = useState('')
     const [dateFrom, setDateFrom] = useState('')
     const [dateTo, setDateTo] = useState('')
@@ -111,6 +112,8 @@ const Connections = () => {
     const [perPage, setPerPage] = useState(50)
 
     const [expanded, setExpanded] = useState(null)
+    const [aiAnalysis, setAiAnalysis] = useState({})
+    const [aiLoading, setAiLoading] = useState({})
 
     const fetchConnections = useCallback(async () => {
         // Only show spinner on cold start (no cache)
@@ -121,6 +124,7 @@ const Connections = () => {
                 search, protocol: proto, tag,
                 date_from: dateFrom, date_to: dateTo,
             })
+            if (port) params.set('port', port)
             if (sessionId) params.set('session_id', sessionId)
             const res = await fetch(`${API}/api/connections?${params}`)
             const data = await res.json()
@@ -130,7 +134,7 @@ const Connections = () => {
             setTotalCount(data.total_count || 0)
             setTotalPages(data.total_pages || 1)
             // Cache default view for instant tab switches
-            if (!search && !proto && !tag && !dateFrom && !dateTo && page === 1) {
+            if (!search && !proto && !port && !tag && !dateFrom && !dateTo && page === 1) {
                 _connCache.set(cacheKey, {
                     connections: data.connections || [],
                     protocols: data.protocols || [],
@@ -144,12 +148,12 @@ const Connections = () => {
         } finally {
             setLoading(false)
         }
-    }, [page, perPage, search, proto, tag, dateFrom, dateTo, sessionId, cacheKey])
+    }, [page, perPage, search, proto, port, tag, dateFrom, dateTo, sessionId, cacheKey])
 
     // Reset to page 1 when filters change
     useEffect(() => {
         setPage(1)
-    }, [search, proto, tag, dateFrom, dateTo, perPage])
+    }, [search, proto, port, tag, dateFrom, dateTo, perPage])
 
     useEffect(() => {
         fetchConnections()
@@ -228,7 +232,7 @@ const Connections = () => {
                     <h1 className="page-title">Connections</h1>
                     <p className="page-subtitle">
                         {totalCount.toLocaleString()} total
-                        {(search || proto || tag || dateFrom || dateTo) && ' (filtered)'}
+                        {(search || proto || port || tag || dateFrom || dateTo) && ' (filtered)'}
                     </p>
                 </div>
                 <button
@@ -286,6 +290,17 @@ const Connections = () => {
                         {allTags.map(t => <option key={t} value={t}>{TAG_CONFIG[t]?.label || t}</option>)}
                     </select>
                 </div>
+
+                <input
+                    type="number"
+                    placeholder="Port…"
+                    value={port}
+                    onChange={e => setPort(e.target.value)}
+                    min="0" max="65535"
+                    style={{ ...inputStyle, width: '90px', textAlign: 'center' }}
+                    onFocus={e => e.target.style.borderColor = 'rgba(0,243,255,0.4)'}
+                    onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.08)'}
+                />
 
                 <select value={perPage} onChange={e => setPerPage(Number(e.target.value))}
                     style={{ ...inputStyle, color: '#8b8b9b', cursor: 'pointer' }}>
@@ -431,6 +446,147 @@ const Connections = () => {
                                                                 <div style={{ fontSize: '0.8rem', color: '#c0c0c0', fontFamily: typeof val === 'string' && val.includes('.') ? 'monospace' : 'inherit' }}>{val}</div>
                                                             </div>
                                                         ))}
+                                                    </div>
+
+                                                    {/* ── AI Analyze Button ── */}
+                                                    <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '0.85rem' }}>
+                                                        {!aiAnalysis[c.id] && !aiLoading[c.id] && (
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation()
+                                                                    setAiLoading(prev => ({ ...prev, [c.id]: true }))
+                                                                    fetch(`${API}/api/connections/analyze`, {
+                                                                        method: 'POST',
+                                                                        headers: { 'Content-Type': 'application/json' },
+                                                                        body: JSON.stringify({
+                                                                            conn_id: c.id,
+                                                                            src_ip: c.src_ip,
+                                                                            dst_ip: c.dst_ip,
+                                                                            src_port: c.src_port || 0,
+                                                                            dst_port: c.dst_port || 0,
+                                                                            protocol: c.protocol,
+                                                                            direction: c.direction,
+                                                                            packets: c.packets,
+                                                                            bytes_str: c.bytes,
+                                                                            tags: c.tags,
+                                                                            time: c.time,
+                                                                        }),
+                                                                    })
+                                                                        .then(r => r.json())
+                                                                        .then(data => {
+                                                                            setAiAnalysis(prev => ({ ...prev, [c.id]: data.explanation || 'No analysis available.' }))
+                                                                            setAiLoading(prev => ({ ...prev, [c.id]: false }))
+                                                                        })
+                                                                        .catch(() => {
+                                                                            setAiAnalysis(prev => ({ ...prev, [c.id]: 'Failed to get AI analysis. Please try again.' }))
+                                                                            setAiLoading(prev => ({ ...prev, [c.id]: false }))
+                                                                        })
+                                                                }}
+                                                                style={{
+                                                                    padding: '0.55rem 1.2rem',
+                                                                    background: 'linear-gradient(135deg, rgba(0,243,255,0.12), rgba(138,43,226,0.08))',
+                                                                    border: '1px solid rgba(0,243,255,0.25)',
+                                                                    borderRadius: '8px',
+                                                                    color: '#7dd8e8',
+                                                                    fontSize: '0.78rem',
+                                                                    fontWeight: 600,
+                                                                    cursor: 'pointer',
+                                                                    transition: 'all 0.2s',
+                                                                    display: 'flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '0.5rem',
+                                                                }}
+                                                                onMouseEnter={e => {
+                                                                    e.currentTarget.style.background = 'linear-gradient(135deg, rgba(0,243,255,0.2), rgba(138,43,226,0.14))'
+                                                                    e.currentTarget.style.borderColor = 'rgba(0,243,255,0.4)'
+                                                                }}
+                                                                onMouseLeave={e => {
+                                                                    e.currentTarget.style.background = 'linear-gradient(135deg, rgba(0,243,255,0.12), rgba(138,43,226,0.08))'
+                                                                    e.currentTarget.style.borderColor = 'rgba(0,243,255,0.25)'
+                                                                }}
+                                                            >
+                                                                🤖 Analyze Connection
+                                                            </button>
+                                                        )}
+
+                                                        {aiLoading[c.id] && (
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: '#7dd8e8', fontSize: '0.8rem' }}>
+                                                                <div style={{
+                                                                    width: '16px', height: '16px',
+                                                                    border: '2px solid rgba(0,243,255,0.3)',
+                                                                    borderTopColor: '#7dd8e8',
+                                                                    borderRadius: '50%',
+                                                                    animation: 'spin 0.8s linear infinite',
+                                                                }} />
+                                                                Analyzing connection with AI...
+                                                            </div>
+                                                        )}
+
+                                                        {aiAnalysis[c.id] && !aiLoading[c.id] && (
+                                                            <div style={{
+                                                                marginTop: '0.5rem',
+                                                                padding: '1rem 1.25rem',
+                                                                background: 'linear-gradient(135deg, rgba(0,243,255,0.06), rgba(138,43,226,0.04))',
+                                                                border: '1px solid rgba(0,243,255,0.15)',
+                                                                borderRadius: '10px',
+                                                                animation: 'fadeIn 0.3s ease',
+                                                            }}>
+                                                                <div style={{
+                                                                    fontSize: '0.68rem', color: '#5a9aaa', fontWeight: 700,
+                                                                    textTransform: 'uppercase', letterSpacing: '0.08em',
+                                                                    marginBottom: '0.6rem',
+                                                                    display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                                                }}>
+                                                                    🤖 AI Connection Analysis
+                                                                </div>
+                                                                <div style={{
+                                                                    fontSize: '0.82rem', color: '#d0d0e0',
+                                                                    lineHeight: '1.6', whiteSpace: 'pre-wrap',
+                                                                }}>
+                                                                    {aiAnalysis[c.id].split('**').map((part, idx) =>
+                                                                        idx % 2 === 1
+                                                                            ? <strong key={idx} style={{ color: '#a0e8ff' }}>{part}</strong>
+                                                                            : <span key={idx}>{part}</span>
+                                                                    )}
+                                                                </div>
+                                                                <div style={{
+                                                                    marginTop: '0.75rem', paddingTop: '0.5rem',
+                                                                    borderTop: '1px solid rgba(0,243,255,0.1)',
+                                                                    fontSize: '0.62rem', color: '#3d5a6e',
+                                                                    display: 'flex', justifyContent: 'space-between',
+                                                                }}>
+                                                                    <span>Powered by Groq AI</span>
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation()
+                                                                            setAiAnalysis(prev => { const next = { ...prev }; delete next[c.id]; return next })
+                                                                            setAiLoading(prev => ({ ...prev, [c.id]: true }))
+                                                                            fetch(`${API}/api/connections/analyze`, {
+                                                                                method: 'POST',
+                                                                                headers: { 'Content-Type': 'application/json' },
+                                                                                body: JSON.stringify({
+                                                                                    conn_id: c.id, src_ip: c.src_ip, dst_ip: c.dst_ip,
+                                                                                    src_port: c.src_port || 0, dst_port: c.dst_port || 0,
+                                                                                    protocol: c.protocol, direction: c.direction,
+                                                                                    packets: c.packets, bytes_str: c.bytes,
+                                                                                    tags: c.tags, time: c.time,
+                                                                                }),
+                                                                            })
+                                                                                .then(r => r.json())
+                                                                                .then(data => {
+                                                                                    setAiAnalysis(prev => ({ ...prev, [c.id]: data.explanation || 'No analysis available.' }))
+                                                                                    setAiLoading(prev => ({ ...prev, [c.id]: false }))
+                                                                                })
+                                                                                .catch(() => {
+                                                                                    setAiAnalysis(prev => ({ ...prev, [c.id]: 'Failed to get analysis.' }))
+                                                                                    setAiLoading(prev => ({ ...prev, [c.id]: false }))
+                                                                                })
+                                                                        }}
+                                                                        style={{ background: 'none', border: 'none', color: '#3d5a6e', cursor: 'pointer', fontSize: '0.62rem', textDecoration: 'underline' }}
+                                                                    >Re-analyze</button>
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </td>
                                             </tr>

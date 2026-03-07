@@ -299,6 +299,7 @@ def get_connections(
     per_page: int = Query(50, ge=10, le=200, description="Rows per page"),
     search: str = Query("", description="Search src/dst IP or protocol"),
     protocol: str = Query("", description="Filter by protocol"),
+    port: int = Query(0, ge=0, le=65535, description="Filter by port number"),
     tag: str = Query("", description="Filter by tag"),
     date_from: str = Query("", description="Start date (YYYY-MM-DD or YYYY-MM-DD HH:MM)"),
     date_to: str = Query("", description="End date (YYYY-MM-DD or YYYY-MM-DD HH:MM)"),
@@ -319,6 +320,10 @@ def get_connections(
     if protocol:
         where_clauses.append("protocol = ?")
         params.append(protocol)
+
+    if port > 0:
+        where_clauses.append("(src_port = ? OR dst_port = ?)")
+        params.extend([port, port])
 
     if tag:
         where_clauses.append("tags LIKE ?")
@@ -383,6 +388,8 @@ def get_connections(
             "dst": f"{dst_ip}:{dst_port}" if dst_port else dst_ip,
             "src_ip": src_ip,
             "dst_ip": dst_ip,
+            "src_port": src_port or 0,
+            "dst_port": dst_port or 0,
             "protocol": proto,
             "direction": direction or "—",
             "packets": packets or 0,
@@ -999,6 +1006,519 @@ def delete_session(session_id: int):
 
     return {"ok": True, "session_id": session_id, "pcap_deleted": pcap_deleted}
 
+
+# ═══════════════════════════════════════════════════════════════
+# AI Alert Explanation (Gemini API)
+# ═══════════════════════════════════════════════════════════════
+
+# Create cache table at startup
+try:
+    import sqlite3 as _sq2
+    _mc2 = _sq2.connect(DB_PATH, timeout=5)
+    _mc2.execute("""
+        CREATE TABLE IF NOT EXISTS alert_explanations (
+            cache_key TEXT PRIMARY KEY,
+            explanation TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    _mc2.commit()
+    _mc2.close()
+except Exception:
+    pass
+
+# Fallback descriptions when Gemini is unavailable
+_FALLBACK_DESCRIPTIONS = {
+    "NETGUARD BRUTE": "🔒 **Brute-force attack detected.** Someone is attempting to guess login credentials by trying many passwords rapidly. This is a confirmed attack — whether from an internal or external source.\n\n🛡️ **Action:** Block the source IP immediately. Check if any logins were successful. If the source is internal, investigate that device for compromise.",
+    "NETGUARD SCAN": "🔍 **Port scan detected.** A host is probing network ports to discover open services. This is active reconnaissance, often a precursor to exploitation. If the source is an internal IP, the device may be compromised.\n\n🛡️ **Action:** Block the source IP. If internal, investigate the device for malware. Review exposed services on the targeted ports.",
+    "Beaconing": "📡 **Beaconing pattern detected.** A device is connecting to the same destination at regular intervals. This pattern is characteristic of malware command-and-control (C2) callbacks.\n\n🛡️ **Action:** Identify which process is making these connections. Check if the destination is legitimate.",
+    "Data Exfiltration": "📤 **Potential data exfiltration.** An unusually large amount of data is being uploaded to an external destination. This could indicate data theft.\n\n🛡️ **Action:** Verify if this is authorized activity (backup, upload). Check the destination reputation.",
+    "Traffic Anomaly": "📊 **Traffic anomaly detected.** Network traffic to this destination significantly exceeds the historical baseline. Could indicate data staging or compromise.\n\n🛡️ **Action:** Compare with normal usage patterns. Investigate if the volume spike is expected.",
+    "New Destination": "🆕 **New destination observed.** This is the first time your network has connected to this IP address. Informational — useful for forensic context.\n\n🛡️ **Action:** No immediate action needed. Note this for future reference.",
+    "ET INFO": "ℹ️ **Informational event.** This is a routine network event detected by the ET ruleset — DNS lookups, IP checks, or TLD queries. Not a threat.\n\n🛡️ **Action:** No action needed. This is normal network activity.",
+    "ET SCAN": "🔍 **Scanning activity.** The ET ruleset detected scanning activity targeting your network.\n\n🛡️ **Action:** Block the source IP if it's external to your network.",
+    "SURICATA": "⚙️ **Protocol anomaly.** The protocol decoder detected malformed or unexpected protocol behavior. This may indicate evasion attempts or corrupted traffic.\n\n🛡️ **Action:** Review the source/destination IPs. Check for misconfigurations.",
+    "FILE_SHARING": "📁 **File sharing service detected.** A device accessed a public file sharing service. This may indicate data leakage or policy violations.\n\n🛡️ **Action:** Verify this is authorized usage. Check what files were transferred.",
+}
+
+
+def _get_ai_key():
+    """Read Groq API key from ~/.netguard/config.json."""
+    try:
+        import json
+        # When running as root (sudo), ~ = /root. Check SUDO_USER's home too.
+        candidates = [
+            os.path.expanduser("~/.netguard/config.json"),
+        ]
+        sudo_user = os.environ.get("SUDO_USER", "")
+        if sudo_user:
+            candidates.insert(0, f"/home/{sudo_user}/.netguard/config.json")
+        for path in candidates:
+            if os.path.exists(path):
+                with open(path) as f:
+                    key = json.load(f).get("groq_api_key", "")
+                    if key:
+                        return key
+        return ""
+    except Exception:
+        return ""
+
+
+def _get_fallback(signature: str) -> str:
+    """Get a static fallback description based on signature keywords."""
+    sig_upper = signature.upper()
+    for key, desc in _FALLBACK_DESCRIPTIONS.items():
+        if key.upper() in sig_upper:
+            return desc
+    return "🔎 **Security event detected.** The intrusion detection system flagged this network activity. Review the signature, source, and destination for context.\n\n🛡️ **Action:** Investigate the source and destination IPs. Check if this activity is expected."
+
+
+def _call_ai(alert_data: dict) -> str:
+    """Call Groq API to explain an alert. Returns explanation text."""
+    import urllib.request
+    import json
+
+    api_key = _get_ai_key()
+    if not api_key:
+        return ""
+
+    # Resolve domain names for both IPs so AI can judge legitimacy
+    import socket
+    src_ip = alert_data.get('src_ip', 'Unknown')
+    dst_ip = alert_data.get('dst_ip', 'Unknown')
+    src_domain, dst_domain = "", ""
+    try:
+        src_domain = socket.getfqdn(src_ip)
+        if src_domain == src_ip:
+            src_domain = ""
+    except Exception:
+        pass
+    try:
+        dst_domain = socket.getfqdn(dst_ip)
+        if dst_domain == dst_ip:
+            dst_domain = ""
+    except Exception:
+        pass
+
+    src_info = f"{src_ip} ({src_domain})" if src_domain else src_ip
+    dst_info = f"{dst_ip} ({dst_domain})" if dst_domain else dst_ip
+
+    prompt = f"""You are a network security analyst for NetGuard, a network intrusion detection system.
+Analyze this security alert and provide:
+1. **What's happening** — Explain in 2-3 sentences what this alert means. Be specific about the IPs, ports, and protocols involved. If the domain resolves to a known legitimate service (Google, Cloudflare, AWS, etc.), explicitly mention this and say it's likely a false positive.
+2. **Risk level** — Is this a real threat or likely benign? One sentence.
+3. **Recommended action** — What should the user do? One practical sentence.
+
+Keep it concise and professional. Use markdown bold for emphasis.
+
+Alert details:
+- Signature: {alert_data.get('signature', 'Unknown')}
+- Category: {alert_data.get('category', 'Unknown')}
+- Severity: {alert_data.get('severity', 'Unknown')}
+- Source IP: {src_info} (port {alert_data.get('src_port', '?')})
+- Destination IP: {dst_info} (port {alert_data.get('dst_port', '?')})
+- Protocol: {alert_data.get('proto', 'Unknown')}
+- Action taken: {alert_data.get('action', 'Unknown')}
+- Timestamp: {alert_data.get('timestamp', 'Unknown')}"""
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    body = json.dumps({
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": "You are a concise network security analyst. Keep responses short and actionable."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 300,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "NetGuard/1.0",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+            return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        return ""
+
+
+from pydantic import BaseModel
+
+class ExplainRequest(BaseModel):
+    alert_id: int = 0
+    signature: str = ""
+    category: str = ""
+    severity: str = ""
+    src_ip: str = ""
+    dst_ip: str = ""
+    src_port: int = 0
+    dst_port: int = 0
+    proto: str = ""
+    action: str = ""
+    timestamp: str = ""
+
+
+@app.post("/api/alerts/explain")
+def explain_alert(req: ExplainRequest):
+    """Get an AI-powered explanation of a security alert.
+
+    Uses Gemini API with DB-level caching — same alert type
+    is never explained twice.
+    """
+    import sqlite3
+
+    # Build a cache key including IPs so same signature with different hosts gets unique explanations
+    cache_key = f"{req.signature}|{req.src_ip}|{req.dst_ip}|{req.src_port}|{req.dst_port}"
+
+    # Check cache first
+    try:
+        conn = get_read_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT explanation FROM alert_explanations WHERE cache_key = ?",
+            (cache_key,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"ok": True, "explanation": row[0], "cached": True}
+    except Exception:
+        pass
+
+    # Call Groq AI
+    explanation = _call_ai(req.dict())
+
+    if not explanation:
+        # Fallback to static description
+        explanation = _get_fallback(req.signature)
+        return {"ok": True, "explanation": explanation, "cached": False, "source": "fallback"}
+
+    # Cache in DB
+    try:
+        wconn = sqlite3.connect(DB_PATH, timeout=5)
+        wconn.execute(
+            "INSERT OR REPLACE INTO alert_explanations (cache_key, explanation) VALUES (?, ?)",
+            (cache_key, explanation)
+        )
+        wconn.commit()
+        wconn.close()
+    except Exception:
+        pass
+
+    return {"ok": True, "explanation": explanation, "cached": False, "source": "groq"}
+
+
+# ── AbuseIPDB IP Reputation Check ────────────────────────────────
+@app.get("/api/ip/check/{ip:path}")
+def check_ip_reputation(ip: str):
+    """Check an IP against AbuseIPDB. Returns detailed abuse info."""
+    import urllib.request
+    import json
+
+    ip = ip.strip()
+
+    # Get API key from config
+    config_paths = []
+    sudo_user = os.environ.get('SUDO_USER')
+    if sudo_user:
+        config_paths.append(f"/home/{sudo_user}/.netguard/config.json")
+    config_paths.append(os.path.expanduser("~/.netguard/config.json"))
+
+    api_key = ""
+    for p in config_paths:
+        try:
+            with open(p, 'r') as f:
+                cfg = json.load(f)
+                api_key = cfg.get('abuseipdb_api_key', '')
+                if api_key:
+                    break
+        except Exception:
+            pass
+
+    if not api_key:
+        return {"ok": False, "error": "AbuseIPDB API key not configured. Add 'abuseipdb_api_key' to ~/.netguard/config.json"}
+
+    # Check if private IP
+    if (ip.startswith('10.') or ip.startswith('192.168.') or ip.startswith('172.16.') or
+        ip.startswith('127.') or ip.startswith('169.254.') or ip == '0.0.0.0' or
+        ip.startswith('::') or ip.startswith('fe80:') or ip.startswith('fc') or ip.startswith('fd')):
+        return {"ok": True, "ip": ip, "abuse_score": 0, "is_private": True,
+                "verdict": "PRIVATE", "detail": "This is a local/private IP address — not routable on the internet."}
+
+    try:
+        url = f"https://api.abuseipdb.com/api/v2/check?ipAddress={ip}&maxAgeInDays=90&verbose"
+        req = urllib.request.Request(url)
+        req.add_header('Key', api_key)
+        req.add_header('Accept', 'application/json')
+        req.add_header('User-Agent', 'NetGuard/1.0')
+
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+
+        r = data.get('data', {})
+        score = r.get('abuseConfidenceScore', 0)
+
+        return {
+            "ok": True,
+            "ip": ip,
+            "abuse_score": score,
+            "country": r.get('countryCode', ''),
+            "isp": r.get('isp', ''),
+            "domain": r.get('domain', ''),
+            "usage_type": r.get('usageType', ''),
+            "total_reports": r.get('totalReports', 0),
+            "num_distinct_users": r.get('numDistinctUsers', 0),
+            "is_whitelisted": r.get('isWhitelisted', False),
+            "is_tor": r.get('isTor', False),
+            "is_malicious": score > 50,
+            "verdict": "MALICIOUS" if score > 50 else ("SUSPICIOUS" if score > 20 else "CLEAN"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"API error: {str(e)[:100]}"}
+
+
+# ── CSV Export ───────────────────────────────────────────────────
+from fastapi.responses import StreamingResponse
+import io
+import csv
+
+@app.get("/api/connections/export/csv")
+def export_connections_csv(
+    search: str = Query("", description="Search filter"),
+    protocol: str = Query("", description="Protocol filter"),
+    port: int = Query(0, ge=0, le=65535, description="Port filter"),
+    tag: str = Query("", description="Tag filter"),
+    date_from: str = Query("", description="Start date"),
+    date_to: str = Query("", description="End date"),
+    session_id: int = Query(0, ge=0, description="Session filter"),
+):
+    """Export filtered connections as a CSV file download."""
+    conn = get_read_conn()
+    cursor = conn.cursor()
+
+    where_clauses = []
+    params = []
+
+    if search:
+        where_clauses.append("(src_ip LIKE ? OR dst_ip LIKE ? OR protocol LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like, like])
+    if protocol:
+        where_clauses.append("protocol = ?")
+        params.append(protocol)
+    if port > 0:
+        where_clauses.append("(src_port = ? OR dst_port = ?)")
+        params.extend([port, port])
+    if tag:
+        where_clauses.append("tags LIKE ?")
+        params.append(f"%{tag}%")
+    if date_from:
+        where_clauses.append("start_time >= ?")
+        params.append(date_from)
+    if date_to:
+        if len(date_to) == 10:
+            date_to += " 23:59:59"
+        where_clauses.append("start_time <= ?")
+        params.append(date_to)
+    if session_id > 0:
+        where_clauses.append("session_id = ?")
+        params.append(session_id)
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    cursor.execute(f"""
+        SELECT id, src_ip, src_port, dst_ip, dst_port, protocol,
+               direction, total_packets, total_bytes, state, tags, start_time
+        FROM connections
+        {where_sql}
+        ORDER BY id DESC
+        LIMIT 10000
+    """, params)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    # Build CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Source IP", "Source Port", "Destination IP", "Destination Port",
+                     "Protocol", "Direction", "Packets", "Bytes", "State", "Tags", "Timestamp"])
+
+    for row in rows:
+        writer.writerow(row)
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=netguard_connections.csv"}
+    )
+
+class AnalyzeConnectionRequest(BaseModel):
+    conn_id: int = 0
+    src_ip: str = ""
+    dst_ip: str = ""
+    src_port: int = 0
+    dst_port: int = 0
+    protocol: str = ""
+    direction: str = ""
+    packets: int = 0
+    bytes_str: str = ""
+    tags: str = ""
+    time: str = ""
+
+
+@app.post("/api/connections/analyze")
+def analyze_connection(req: AnalyzeConnectionRequest):
+    """Get an AI-powered analysis of a network connection."""
+    import sqlite3
+    import socket
+
+    cache_key = f"conn|{req.src_ip}|{req.dst_ip}|{req.protocol}|{req.conn_id}"
+
+    # Check cache
+    try:
+        conn = get_read_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT explanation FROM alert_explanations WHERE cache_key = ?",
+            (cache_key,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"ok": True, "explanation": row[0], "cached": True}
+    except Exception:
+        pass
+
+    api_key = _get_ai_key()
+    if not api_key:
+        return {"ok": True, "explanation": "⚙️ **Connection profile.** Configure an AI API key in ~/.netguard/config.json to get AI-powered connection analysis.", "cached": False, "source": "fallback"}
+
+    # Reverse DNS
+    src_domain, dst_domain = "", ""
+    try:
+        src_domain = socket.getfqdn(req.src_ip)
+        if src_domain == req.src_ip:
+            src_domain = ""
+    except Exception:
+        pass
+    try:
+        dst_domain = socket.getfqdn(req.dst_ip)
+        if dst_domain == req.dst_ip:
+            dst_domain = ""
+    except Exception:
+        pass
+
+    src_info = f"{req.src_ip} ({src_domain})" if src_domain else req.src_ip
+    dst_info = f"{req.dst_ip} ({dst_domain})" if dst_domain else req.dst_ip
+
+    # Count related alerts for these IPs
+    alert_count = 0
+    alert_summaries = ""
+    try:
+        rconn = get_read_conn()
+        rc = rconn.cursor()
+        rc.execute(
+            "SELECT signature, severity FROM alerts WHERE src_ip = ? OR dst_ip = ? OR src_ip = ? OR dst_ip = ? ORDER BY id DESC LIMIT 3",
+            (req.src_ip, req.src_ip, req.dst_ip, req.dst_ip)
+        )
+        rows = rc.fetchall()
+        alert_count = len(rows)
+        if rows:
+            alert_summaries = "; ".join([f"[{r[1]}] {r[0][:60]}" for r in rows])
+        rconn.close()
+    except Exception:
+        pass
+
+    tags_info = req.tags if req.tags else "None"
+    alerts_info = f"{alert_count} related alerts: {alert_summaries}" if alert_count > 0 else "No related alerts"
+
+    import urllib.request
+    import json
+
+    # Well-known port identification
+    port_services = {
+        22: 'SSH', 53: 'DNS', 80: 'HTTP', 443: 'HTTPS/TLS',
+        993: 'IMAPS', 995: 'POP3S', 3306: 'MySQL', 3389: 'RDP',
+        5432: 'PostgreSQL', 8080: 'HTTP-Alt', 8443: 'HTTPS-Alt',
+    }
+    dst_service = port_services.get(req.dst_port, f'port {req.dst_port}')
+    src_service = port_services.get(req.src_port, f'port {req.src_port}')
+
+    prompt = f"""You are a network security analyst for NetGuard IDS. Analyze this connection with technical depth.
+
+Provide:
+1. **Service identification** — What service/application is this? Identify using the destination port, protocol, and resolved domain. Be specific (e.g., "HTTPS to Google's CDN" not just "web traffic").
+2. **Packet analysis** — Analyze the packet count ({req.packets}) and data volume ({req.bytes_str}) for this protocol. Is this normal? Calculate average packet size if relevant.
+3. **Risk assessment** — Rate as LOW/MEDIUM/HIGH risk. Consider: domain reputation, port usage, direction, behavioral tags, and any related IDS alerts.
+4. **Technical recommendation** — One specific, actionable technical step.
+
+Be technical and specific. Mention actual port numbers, services, and domain names.
+
+Connection:
+- Source: {src_info} (port {req.src_port} / {src_service})
+- Destination: {dst_info} (port {req.dst_port} / {dst_service})
+- Protocol: {req.protocol} over {req.direction}
+- Packets: {req.packets} | Data: {req.bytes_str}
+- Behavioral tags: {tags_info}
+- Started: {req.time}
+- {alerts_info}"""
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    body = json.dumps({
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": "You are a concise network security analyst. Keep responses short and actionable."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 300,
+    }).encode("utf-8")
+
+    req2 = urllib.request.Request(
+        url, data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "NetGuard/1.0",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req2, timeout=15) as resp:
+            data = json.loads(resp.read())
+            explanation = data["choices"][0]["message"]["content"]
+    except Exception:
+        explanation = ""
+
+    if not explanation:
+        return {"ok": True, "explanation": "🔎 **Connection detected.** Could not reach AI service for analysis. Check your API key and internet connection.", "cached": False, "source": "fallback"}
+
+    # Cache
+    try:
+        wconn = sqlite3.connect(DB_PATH, timeout=5)
+        wconn.execute(
+            "INSERT OR REPLACE INTO alert_explanations (cache_key, explanation) VALUES (?, ?)",
+            (cache_key, explanation)
+        )
+        wconn.commit()
+        wconn.close()
+    except Exception:
+        pass
+
+    return {"ok": True, "explanation": explanation, "cached": False, "source": "groq"}
 
 @app.get("/api/sessions/{session_id}/check")
 def check_session(session_id: int):

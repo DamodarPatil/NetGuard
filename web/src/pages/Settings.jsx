@@ -3,7 +3,7 @@ import {
     Settings as SettingsIcon, CheckCircle, XCircle, Shield, HardDrive,
     Database, Trash2, RefreshCw, Monitor, Cpu, AlertTriangle,
     FileText, Clock, Activity, ChevronDown, ChevronRight, Info,
-    Play, Square
+    Play, Square, Download
 } from 'lucide-react'
 import { useSession } from '../context/SessionContext'
 import { useApiCache } from '../hooks/useApiCache'
@@ -425,6 +425,26 @@ const Settings = () => {
                                             >
                                                 <Play size={10} />
                                                 Load
+                                            </button>
+                                        )}
+
+                                        {/* Export CSV — only for completed sessions */}
+                                        {s.end_time && (
+                                            <button
+                                                onClick={e => {
+                                                    e.stopPropagation()
+                                                    window.open(`http://localhost:8000/api/connections/export/csv?session_id=${s.id}`, '_blank')
+                                                }}
+                                                style={{
+                                                    display: 'flex', alignItems: 'center', gap: '4px',
+                                                    padding: '4px 10px', borderRadius: '6px',
+                                                    background: 'rgba(0,200,255,0.06)', border: '1px solid rgba(0,200,255,0.15)',
+                                                    color: '#44ccdd', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 600,
+                                                    transition: 'all 0.15s',
+                                                }}
+                                            >
+                                                <Download size={10} />
+                                                CSV
                                             </button>
                                         )}
 

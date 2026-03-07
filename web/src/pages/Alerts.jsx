@@ -206,6 +206,10 @@ const Alerts = () => {
 
     // Expand
     const [expanded, setExpanded] = useState(null)
+    const [aiExplanations, setAiExplanations] = useState({})
+    const [aiLoading, setAiLoading] = useState({})
+    const [ipCheck, setIpCheck] = useState({})
+    const [ipLoading, setIpLoading] = useState({})
 
     // Live polling
     const intervalRef = useRef(null)
@@ -679,6 +683,307 @@ const Alerts = () => {
                                                         }}>{val}</div>
                                                     </div>
                                                 ))}
+                                            </div>
+
+                                            {/* ── AbuseIPDB IP Reputation ── */}
+                                            <div style={{ marginTop: '0.85rem', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '0.75rem' }}>
+                                                <div style={{ fontSize: '0.62rem', color: '#3d3d4e', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.5rem', fontWeight: 600 }}>
+                                                    🛡️ IP Reputation Check (AbuseIPDB)
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                                                    {[['src', a.src_ip, 'Source'], ['dst', a.dst_ip, 'Destination']].map(([role, ip, label]) => {
+                                                        if (!ip) return null
+                                                        const key = `${a.id}_${role}`
+                                                        const data = ipCheck[key]
+                                                        const loading = ipLoading[key]
+
+                                                        const doCheck = (e) => {
+                                                            e.stopPropagation()
+                                                            setIpLoading(prev => ({ ...prev, [key]: true }))
+                                                            fetch(`${API}/api/ip/check/${encodeURIComponent(ip)}`)
+                                                                .then(r => r.json())
+                                                                .then(res => {
+                                                                    setIpCheck(prev => ({ ...prev, [key]: res }))
+                                                                    setIpLoading(prev => ({ ...prev, [key]: false }))
+                                                                })
+                                                                .catch(() => {
+                                                                    setIpCheck(prev => ({ ...prev, [key]: { ok: false, error: 'Network error' } }))
+                                                                    setIpLoading(prev => ({ ...prev, [key]: false }))
+                                                                })
+                                                        }
+
+                                                        // Not checked yet — show button
+                                                        if (!data && !loading) {
+                                                            return (
+                                                                <button key={role} onClick={doCheck} style={{
+                                                                    padding: '0.35rem 0.75rem', borderRadius: '6px',
+                                                                    background: 'rgba(255,170,0,0.08)',
+                                                                    border: '1px solid rgba(255,170,0,0.2)',
+                                                                    color: '#ccaa44', fontSize: '0.72rem', fontWeight: 600,
+                                                                    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
+                                                                }}>
+                                                                    <Shield size={11} /> Check {label} IP
+                                                                </button>
+                                                            )
+                                                        }
+
+                                                        // Loading
+                                                        if (loading) {
+                                                            return (
+                                                                <div key={role} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#7dd8e8', fontSize: '0.75rem' }}>
+                                                                    <div style={{
+                                                                        width: '12px', height: '12px',
+                                                                        border: '2px solid rgba(0,243,255,0.3)',
+                                                                        borderTopColor: '#7dd8e8',
+                                                                        borderRadius: '50%',
+                                                                        animation: 'spin 0.8s linear infinite',
+                                                                    }} />
+                                                                    Checking {label.toLowerCase()}…
+                                                                </div>
+                                                            )
+                                                        }
+
+                                                        // Error
+                                                        if (!data.ok) {
+                                                            return (
+                                                                <div key={role} style={{ fontSize: '0.75rem' }}>
+                                                                    <span style={{ color: '#5a5a6e', fontWeight: 600 }}>{label}:</span>{' '}
+                                                                    <span style={{ color: '#ff6b6b' }}>{data.error}</span>
+                                                                    <button onClick={doCheck} style={{ marginLeft: '8px', background: 'none', border: 'none', color: '#5a5a6e', cursor: 'pointer', fontSize: '0.7rem' }}>↻ Retry</button>
+                                                                </div>
+                                                            )
+                                                        }
+
+                                                        // Private IP
+                                                        if (data.is_private) {
+                                                            return (
+                                                                <div key={role} style={{
+                                                                    padding: '0.5rem 0.85rem', borderRadius: '8px',
+                                                                    background: 'rgba(100,100,120,0.08)', border: '1px solid rgba(100,100,120,0.15)',
+                                                                    fontSize: '0.75rem', minWidth: '220px',
+                                                                }}>
+                                                                    <div style={{ fontWeight: 600, color: '#8b8b9b', marginBottom: '4px' }}>{label}: <span style={{ fontFamily: 'monospace' }}>{ip}</span></div>
+                                                                    <div style={{ color: '#5a5a6e' }}>🏠 Private/local address — not internet-routable</div>
+                                                                </div>
+                                                            )
+                                                        }
+
+                                                        // Full result card
+                                                        const score = data.abuse_score || 0
+                                                        const clr = score > 50 ? '#ff4444' : score > 20 ? '#ffaa00' : '#00ff73'
+                                                        return (
+                                                            <div key={role} style={{
+                                                                padding: '0.65rem 0.85rem', borderRadius: '10px',
+                                                                background: `${clr}06`, border: `1px solid ${clr}20`,
+                                                                minWidth: '260px', flex: 1, maxWidth: '400px',
+                                                            }}>
+                                                                {/* Header */}
+                                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                                                    <div style={{ fontWeight: 600, color: '#c0c0c0', fontSize: '0.75rem' }}>
+                                                                        {role === 'src' ? '⬆' : '⬇'} {label}: <span style={{ fontFamily: 'monospace' }}>{ip}</span>
+                                                                    </div>
+                                                                    <span style={{
+                                                                        padding: '2px 8px', borderRadius: '4px',
+                                                                        background: `${clr}18`, color: clr,
+                                                                        fontWeight: 700, fontSize: '0.65rem', letterSpacing: '0.04em',
+                                                                    }}>
+                                                                        {data.verdict || (score > 50 ? 'MALICIOUS' : score > 20 ? 'SUSPICIOUS' : 'CLEAN')}
+                                                                    </span>
+                                                                </div>
+
+                                                                {/* Score bar */}
+                                                                <div style={{ marginBottom: '0.5rem' }}>
+                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: '#5a5a6e', marginBottom: '3px' }}>
+                                                                        <span>Abuse Confidence</span>
+                                                                        <span style={{ color: clr, fontWeight: 700 }}>{score}%</span>
+                                                                    </div>
+                                                                    <div style={{ height: '4px', borderRadius: '2px', background: 'rgba(255,255,255,0.06)' }}>
+                                                                        <div style={{ height: '100%', width: `${score}%`, borderRadius: '2px', background: clr, transition: 'width 0.4s ease' }} />
+                                                                    </div>
+                                                                </div>
+
+                                                                {/* Details grid */}
+                                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px', fontSize: '0.7rem' }}>
+                                                                    {data.country && <><span style={{ color: '#5a5a6e' }}>Country</span><span style={{ color: '#8b8b9b' }}>🌍 {data.country}</span></>}
+                                                                    {data.isp && <><span style={{ color: '#5a5a6e' }}>ISP</span><span style={{ color: '#8b8b9b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{data.isp}</span></>}
+                                                                    {data.domain && <><span style={{ color: '#5a5a6e' }}>Domain</span><span style={{ color: '#8b8b9b' }}>{data.domain}</span></>}
+                                                                    {data.usage_type && <><span style={{ color: '#5a5a6e' }}>Type</span><span style={{ color: '#8b8b9b' }}>{data.usage_type}</span></>}
+                                                                    {data.total_reports > 0 && <><span style={{ color: '#5a5a6e' }}>Reports</span><span style={{ color: score > 50 ? '#ff6b6b' : '#8b8b9b', fontWeight: 600 }}>{data.total_reports} ({data.num_distinct_users || 0} users)</span></>}
+                                                                    {data.is_tor && <><span style={{ color: '#5a5a6e' }}>Tor</span><span style={{ color: '#ffaa00', fontWeight: 600 }}>⚠ Tor Exit Node</span></>}
+                                                                    {data.is_whitelisted && <><span style={{ color: '#5a5a6e' }}>Whitelist</span><span style={{ color: '#00ff73' }}>✓ Whitelisted</span></>}
+                                                                </div>
+
+                                                                {/* Re-check */}
+                                                                <button onClick={doCheck} style={{
+                                                                    marginTop: '6px', background: 'none', border: 'none',
+                                                                    color: '#3d3d4e', cursor: 'pointer', fontSize: '0.65rem',
+                                                                    padding: 0,
+                                                                }}>↻ Re-check</button>
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            </div>
+
+                                            {/* ── AI Explain Button ── */}
+                                            <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '0.85rem' }}>
+                                                {!aiExplanations[a.id] && !aiLoading[a.id] && (
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            setAiLoading(prev => ({ ...prev, [a.id]: true }))
+                                                            fetch(`${API}/api/alerts/explain`, {
+                                                                method: 'POST',
+                                                                headers: { 'Content-Type': 'application/json' },
+                                                                body: JSON.stringify({
+                                                                    alert_id: a.id,
+                                                                    signature: a.signature,
+                                                                    category: a.category,
+                                                                    severity: a.severity,
+                                                                    src_ip: a.src_ip,
+                                                                    dst_ip: a.dst_ip,
+                                                                    src_port: a.src_port || 0,
+                                                                    dst_port: a.dst_port || 0,
+                                                                    proto: a.proto,
+                                                                    action: a.action,
+                                                                    timestamp: a.timestamp,
+                                                                }),
+                                                            })
+                                                                .then(r => r.json())
+                                                                .then(data => {
+                                                                    setAiExplanations(prev => ({ ...prev, [a.id]: data.explanation || 'No explanation available.' }))
+                                                                    setAiLoading(prev => ({ ...prev, [a.id]: false }))
+                                                                })
+                                                                .catch(() => {
+                                                                    setAiExplanations(prev => ({ ...prev, [a.id]: 'Failed to get AI explanation. Please try again.' }))
+                                                                    setAiLoading(prev => ({ ...prev, [a.id]: false }))
+                                                                })
+                                                        }}
+                                                        style={{
+                                                            padding: '0.55rem 1.2rem',
+                                                            background: 'linear-gradient(135deg, rgba(138,43,226,0.15), rgba(0,200,255,0.1))',
+                                                            border: '1px solid rgba(138,43,226,0.3)',
+                                                            borderRadius: '8px',
+                                                            color: '#c4a8ff',
+                                                            fontSize: '0.78rem',
+                                                            fontWeight: 600,
+                                                            cursor: 'pointer',
+                                                            transition: 'all 0.2s',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.5rem',
+                                                        }}
+                                                        onMouseEnter={e => {
+                                                            e.currentTarget.style.background = 'linear-gradient(135deg, rgba(138,43,226,0.25), rgba(0,200,255,0.18))'
+                                                            e.currentTarget.style.borderColor = 'rgba(138,43,226,0.5)'
+                                                        }}
+                                                        onMouseLeave={e => {
+                                                            e.currentTarget.style.background = 'linear-gradient(135deg, rgba(138,43,226,0.15), rgba(0,200,255,0.1))'
+                                                            e.currentTarget.style.borderColor = 'rgba(138,43,226,0.3)'
+                                                        }}
+                                                    >
+                                                        🤖 Explain with AI
+                                                    </button>
+                                                )}
+
+                                                {/* Loading spinner */}
+                                                {aiLoading[a.id] && (
+                                                    <div style={{
+                                                        display: 'flex', alignItems: 'center', gap: '0.6rem',
+                                                        color: '#c4a8ff', fontSize: '0.8rem',
+                                                    }}>
+                                                        <div style={{
+                                                            width: '16px', height: '16px',
+                                                            border: '2px solid rgba(138,43,226,0.3)',
+                                                            borderTopColor: '#c4a8ff',
+                                                            borderRadius: '50%',
+                                                            animation: 'spin 0.8s linear infinite',
+                                                        }} />
+                                                        Analyzing alert with AI...
+                                                    </div>
+                                                )}
+
+                                                {/* AI Response card */}
+                                                {aiExplanations[a.id] && !aiLoading[a.id] && (
+                                                    <div style={{
+                                                        marginTop: '0.5rem',
+                                                        padding: '1rem 1.25rem',
+                                                        background: 'linear-gradient(135deg, rgba(138,43,226,0.08), rgba(0,200,255,0.04))',
+                                                        border: '1px solid rgba(138,43,226,0.2)',
+                                                        borderRadius: '10px',
+                                                        animation: 'fadeIn 0.3s ease',
+                                                    }}>
+                                                        <div style={{
+                                                            fontSize: '0.68rem', color: '#8a6bbd', fontWeight: 700,
+                                                            textTransform: 'uppercase', letterSpacing: '0.08em',
+                                                            marginBottom: '0.6rem',
+                                                            display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                                        }}>
+                                                            🤖 AI Analysis
+                                                        </div>
+                                                        <div style={{
+                                                            fontSize: '0.82rem', color: '#d0d0e0',
+                                                            lineHeight: '1.6', whiteSpace: 'pre-wrap',
+                                                        }}>
+                                                            {aiExplanations[a.id].split('**').map((part, idx) =>
+                                                                idx % 2 === 1
+                                                                    ? <strong key={idx} style={{ color: '#e8d0ff' }}>{part}</strong>
+                                                                    : <span key={idx}>{part}</span>
+                                                            )}
+                                                        </div>
+                                                        <div style={{
+                                                            marginTop: '0.75rem', paddingTop: '0.5rem',
+                                                            borderTop: '1px solid rgba(138,43,226,0.12)',
+                                                            fontSize: '0.62rem', color: '#5a4a6e',
+                                                            display: 'flex', justifyContent: 'space-between',
+                                                        }}>
+                                                            <span>Powered by Groq AI</span>
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation()
+                                                                    // Clear current explanation and immediately re-trigger
+                                                                    setAiExplanations(prev => {
+                                                                        const next = { ...prev }
+                                                                        delete next[a.id]
+                                                                        return next
+                                                                    })
+                                                                    setAiLoading(prev => ({ ...prev, [a.id]: true }))
+                                                                    fetch(`${API}/api/alerts/explain`, {
+                                                                        method: 'POST',
+                                                                        headers: { 'Content-Type': 'application/json' },
+                                                                        body: JSON.stringify({
+                                                                            alert_id: a.id,
+                                                                            signature: a.signature,
+                                                                            category: a.category,
+                                                                            severity: a.severity,
+                                                                            src_ip: a.src_ip,
+                                                                            dst_ip: a.dst_ip,
+                                                                            src_port: a.src_port || 0,
+                                                                            dst_port: a.dst_port || 0,
+                                                                            proto: a.proto,
+                                                                            action: a.action,
+                                                                            timestamp: a.timestamp,
+                                                                        }),
+                                                                    })
+                                                                        .then(r => r.json())
+                                                                        .then(data => {
+                                                                            setAiExplanations(prev => ({ ...prev, [a.id]: data.explanation || 'No explanation available.' }))
+                                                                            setAiLoading(prev => ({ ...prev, [a.id]: false }))
+                                                                        })
+                                                                        .catch(() => {
+                                                                            setAiExplanations(prev => ({ ...prev, [a.id]: 'Failed to get AI explanation. Please try again.' }))
+                                                                            setAiLoading(prev => ({ ...prev, [a.id]: false }))
+                                                                        })
+                                                                }}
+                                                                style={{
+                                                                    background: 'none', border: 'none',
+                                                                    color: '#5a4a6e', cursor: 'pointer',
+                                                                    fontSize: '0.62rem', textDecoration: 'underline',
+                                                                }}
+                                                            >Re-analyze</button>
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     )}

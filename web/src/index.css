@@ -609,3 +609,9 @@ body {
 .fade-in {
   animation: fadeIn 0.6s ease-out both;
 }
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
