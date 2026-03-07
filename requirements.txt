@@ -1,11 +1,15 @@
-# NetGuard Dependencies
-# Core
+# NetGuard - Python Dependencies
+# Install: pip install -r requirements.txt
+
+# Core capture engine
 scapy>=2.5.0
-# Database
-# (sqlite3 is built-in)
-# CLI
+
+# CLI interface
 rich>=13.0.0
-# GUI (install later)
-# customtkinter>=5.0.0
-# Reports (install later)
-# reportlab>=4.0.0
+
+# Web GUI backend
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+
+# Config parsing
+pyyaml>=6.0
