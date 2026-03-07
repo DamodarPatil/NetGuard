@@ -17,6 +17,8 @@ build/
 
 # Database
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 data/*.db
@@ -39,3 +41,6 @@ Thumbs.db
 
 # Reports
 reports/*.pdf
+
+# Tests
+tests/

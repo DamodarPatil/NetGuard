@@ -199,8 +199,8 @@ def get_alerts(
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
-    # Unfiltered severity counts (always show totals on stat cards)
-    cursor.execute("SELECT severity_num, COUNT(*) FROM alerts GROUP BY severity_num")
+    # Severity counts — scoped to the same filters/session as the alert list
+    cursor.execute(f"SELECT severity_num, COUNT(*) FROM alerts {where_sql} GROUP BY severity_num", list(params))
     total_sev = {r[0]: r[1] for r in cursor.fetchall()}
     total_high = total_sev.get(1, 0)
     total_medium = total_sev.get(2, 0)
