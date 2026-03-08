@@ -1,5 +1,5 @@
 """
-Threat Intelligence module for NetGuard.
+Threat Intelligence module for FlowSentrix.
 
 Provides IP reputation checking via AbuseIPDB API (free tier: 1K checks/day).
 Results are cached in the database to avoid redundant API calls.
@@ -33,7 +33,7 @@ def _get_user_home():
         return pwd.getpwnam(sudo_user).pw_dir
     return os.path.expanduser('~')
 
-CONFIG_DIR = os.path.join(_get_user_home(), '.netguard')
+CONFIG_DIR = os.path.join(_get_user_home(), '.flowsentrix')
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 
 # AbuseIPDB API endpoint
@@ -149,7 +149,7 @@ class ThreatIntelChecker:
         self._stop_event.clear()
         t = threading.Thread(
             target=self._background_worker,
-            name='NetGuard-ThreatIntel',
+            name='FlowSentrix-ThreatIntel',
             daemon=True
         )
         t.start()

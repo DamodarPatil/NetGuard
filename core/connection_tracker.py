@@ -1,5 +1,5 @@
 """
-Connection/Flow Tracker for NetGuard.
+Connection/Flow Tracker for FlowSentrix.
 
 Aggregates individual packets into connection-level summaries (flows).
 This is how real enterprise network monitors (Zeek, ntopng, Arkime) work:

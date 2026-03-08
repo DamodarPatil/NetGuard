@@ -1,5 +1,5 @@
 """
-NetGuard Intelligence Module
+FlowSentrix Intelligence Module
 🧠 Behavioral tagging, anomaly detection, and threat intelligence.
 
 Components:

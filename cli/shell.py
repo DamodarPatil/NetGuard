@@ -1,5 +1,5 @@
 """
-NetGuard Interactive Shell
+FlowSentrix Interactive Shell
 Metasploit-style CLI with background capture, tab completion, and Rich display.
 """
 import cmd
@@ -30,10 +30,10 @@ except ImportError:
     HAS_READLINE = False
 
 
-class NetGuardShell(cmd.Cmd):
-    """Interactive NetGuard shell with background capture support."""
+class FlowSentrixShell(cmd.Cmd):
+    """Interactive FlowSentrix shell with background capture support."""
     
-    prompt = "\033[1;36mnetguard\033[0m \033[1;32m▶\033[0m "
+    prompt = "\033[1;36mflowsentrix\033[0m \033[1;32m▶\033[0m "
     doc_header = "Available Commands (type help <command> for details)"
     
     def __init__(self):
@@ -42,7 +42,7 @@ class NetGuardShell(cmd.Cmd):
         # Config
         self.interface = self._detect_interface()
         self.csv_file = None
-        self.db_path = "data/netguard.db"
+        self.db_path = "data/flowsentrix.db"
         self.capture_count = 0  # 0 = infinite
         
         # Capture state
@@ -108,8 +108,8 @@ class NetGuardShell(cmd.Cmd):
     def _init_db(self):
         """Initialize database connection for queries."""
         try:
-            from core.database import NetGuardDatabase
-            self._db = NetGuardDatabase(self.db_path)
+            from core.database import FlowSentrixDatabase
+            self._db = FlowSentrixDatabase(self.db_path)
         except Exception:
             self._db = None
     
@@ -264,7 +264,7 @@ Usage:
             # Start capture in background thread
             self.capture_thread = threading.Thread(
                 target=self._run_capture,
-                name="NetGuard-CaptureSession",
+                name="FlowSentrix-CaptureSession",
                 daemon=True
             )
             self.capture_thread.start()
@@ -301,7 +301,7 @@ Usage:
             self._do_capture_stop()
             
         except PermissionError:
-            console.print("  [red]✗ Root privileges required! Run with: sudo python3 netguard.py[/red]")
+            console.print("  [red]✗ Root privileges required! Run with: sudo python3 flowsentrix.py[/red]")
             self.capturing = False
         except Exception as e:
             console.print(f"  [red]✗ Failed to start capture: {e}[/red]")
@@ -338,9 +338,9 @@ Usage:
         pcap_mb = sniffer.pcap_total_bytes / (1024 * 1024) if sniffer.pcap_total_bytes else 0
         
         if pcap_count > 0:
-            title = f"⚡ NetGuard | {pcap_count:,} captured | {displayed:,} displayed | {pcap_mb:.1f} MB | {elapsed}"
+            title = f"⚡ FlowSentrix | {pcap_count:,} captured | {displayed:,} displayed | {pcap_mb:.1f} MB | {elapsed}"
         else:
-            title = f"⚡ NetGuard | {displayed:,} packets | {pcap_mb:.1f} MB | {elapsed}"
+            title = f"⚡ FlowSentrix | {displayed:,} packets | {pcap_mb:.1f} MB | {elapsed}"
         
         # Set terminal title bar (ANSI escape — works in all modern terminals)
         sys.stdout.write(f"\033]0;{title}\007")
@@ -1061,7 +1061,7 @@ Usage:
         elif key == 'api-key':
             checker = ThreatIntelChecker()
             checker.set_api_key(value)
-            console.print(f"  [green]✓[/green] AbuseIPDB API key saved to [bold]~/.netguard/config.json[/bold]")
+            console.print(f"  [green]✓[/green] AbuseIPDB API key saved to [bold]~/.flowsentrix/config.json[/bold]")
             console.print(f"  [dim]  Threat intel lookups will be enabled on next capture.[/dim]")
         else:
             console.print(f"  [red]Unknown setting: {key}[/red]")
@@ -1108,7 +1108,7 @@ Usage:
             filename = parts[1]
         else:
             # Auto-generate filename with timestamp
-            filename = f"netguard_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            filename = f"flowsentrix_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         # Auto-append .csv if not present
         if not filename.lower().endswith('.csv'):
             filename += '.csv'
@@ -1135,7 +1135,7 @@ Usage:
         os.system('clear' if os.name != 'nt' else 'cls')
     
     def do_exit(self, args):
-        """Exit NetGuard."""
+        """Exit FlowSentrix."""
         if self.capturing:
             console.print("  [yellow]Stopping capture...[/yellow]")
             self._capture_stop()
@@ -1143,7 +1143,7 @@ Usage:
         return True
     
     def do_quit(self, args):
-        """Exit NetGuard."""
+        """Exit FlowSentrix."""
         return self.do_exit(args)
     
     def do_EOF(self, args):
@@ -1200,7 +1200,7 @@ Usage:
         console.print("  [bold cyan]━━━ OTHER ━━━[/bold cyan]")
         console.print("    [bold]clear[/bold]                  Clear screen")
         console.print("    [bold]help[/bold] [dim][command][/dim]        Show help")
-        console.print("    [bold]exit[/bold]                   Exit NetGuard")
+        console.print("    [bold]exit[/bold]                   Exit FlowSentrix")
         console.print()
     
     # ── SHELL OVERRIDES ─────────────────────────────────────────

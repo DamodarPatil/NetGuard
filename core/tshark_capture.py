@@ -1,5 +1,5 @@
 """
-TsharkCapture — dumpcap + tshark zero-drop capture backend for NetGuard.
+TsharkCapture — dumpcap + tshark zero-drop capture backend for FlowSentrix.
 
 Architecture (true zero-drop):
   Process 1 (dumpcap):   Captures at kernel speed → writes .pcapng directly (pure C, no Python)
@@ -21,7 +21,7 @@ import os
 import time
 from datetime import datetime
 
-from core.database import NetGuardDatabase
+from core.database import FlowSentrixDatabase
 from core.connection_tracker import ConnectionTracker
 from core.behavior_engine import BehaviorEngine
 from intelligence.suricata import SuricataEngine
@@ -68,7 +68,7 @@ class TsharkCapture:
       - on_packet callback
     """
 
-    def __init__(self, interface=None, db_path="data/netguard.db", csv_file=None, on_packet=None):
+    def __init__(self, interface=None, db_path="data/flowsentrix.db", csv_file=None, on_packet=None):
         self.interface = interface
         self.db_path = db_path
         self.csv_file = csv_file
@@ -91,7 +91,7 @@ class TsharkCapture:
         self._tshark = None
 
         # Database
-        self._db = NetGuardDatabase(db_path)
+        self._db = FlowSentrixDatabase(db_path)
         self.session_id = None
         self.local_ips = self._get_local_ips()
 
@@ -762,7 +762,7 @@ class TsharkCapture:
 
         for category_key, remap in suricata_remap.items():
             # Match by checking if the signature contains keywords
-            # e.g. NETGUARD_BRUTE_FORCE matches 'BRUTE-FORCE' or 'BRUTE_FORCE'
+            # e.g. FLOWSENTRIX_BRUTE_FORCE matches 'BRUTE-FORCE' or 'BRUTE_FORCE'
             check_key = category_key.replace('_', ' ').replace('-', ' ').upper()
             sig_upper = signature.upper().replace('-', ' ').replace('_', ' ')
             if check_key in sig_upper:
@@ -850,12 +850,12 @@ class TsharkCapture:
 
                             # Map tag names to user-friendly alert signatures
                             tag_signatures = {
-                                'beaconing': f'NETGUARD BEHAVIOR Beaconing Detected — {reason}',
-                                'data_exfil': f'NETGUARD BEHAVIOR Data Exfiltration — {reason}',
-                                'new_dest': f'NETGUARD BEHAVIOR New Destination — {reason}',
-                                'traffic_anomaly': f'NETGUARD BEHAVIOR Traffic Anomaly — {reason}',
+                                'beaconing': f'FLOWSENTRIX BEHAVIOR Beaconing Detected — {reason}',
+                                'data_exfil': f'FLOWSENTRIX BEHAVIOR Data Exfiltration — {reason}',
+                                'new_dest': f'FLOWSENTRIX BEHAVIOR New Destination — {reason}',
+                                'traffic_anomaly': f'FLOWSENTRIX BEHAVIOR Traffic Anomaly — {reason}',
                             }
-                            signature = tag_signatures.get(tag_name, f'NETGUARD BEHAVIOR {tag_name} — {reason}')
+                            signature = tag_signatures.get(tag_name, f'FLOWSENTRIX BEHAVIOR {tag_name} — {reason}')
 
                             alert = {
                                 'timestamp': datetime.now().isoformat(),
@@ -1001,7 +1001,7 @@ class TsharkCapture:
             # Thread 1: Fast reader — drain tshark output into queue
             reader_thread = threading.Thread(
                 target=self._read_tshark,
-                name="NetGuard-TsharkReader",
+                name="FlowSentrix-TsharkReader",
                 daemon=True
             )
             reader_thread.start()
@@ -1009,7 +1009,7 @@ class TsharkCapture:
             # Thread 2: Monitor pcapng file for accurate packet count
             monitor_thread = threading.Thread(
                 target=self._monitor_pcap_count,
-                name="NetGuard-PcapMonitor",
+                name="FlowSentrix-PcapMonitor",
                 daemon=True
             )
             monitor_thread.start()
@@ -1024,7 +1024,7 @@ class TsharkCapture:
                     # Thread 3: Alert reader — tail eve.json for real-time alerts
                     alert_thread = threading.Thread(
                         target=self._read_suricata_alerts,
-                        name="NetGuard-AlertReader",
+                        name="FlowSentrix-AlertReader",
                         daemon=True
                     )
                     alert_thread.start()
@@ -1038,7 +1038,7 @@ class TsharkCapture:
             )
         except PermissionError:
             raise PermissionError(
-                "Root privileges required. Run with: sudo python3 netguard.py"
+                "Root privileges required. Run with: sudo python3 flowsentrix.py"
             )
         finally:
             self._cleanup()

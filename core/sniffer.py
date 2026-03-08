@@ -1,5 +1,5 @@
 """
-NetGuard Packet Sniffer Module
+FlowSentrix Packet Sniffer Module
 Production-Ready: Phase 3 - Wireshark-Inspired Enhanced Monitoring
 """
 from scapy.all import sniff, IP, IPv6, TCP, UDP, ICMP, ICMPv6EchoRequest, ICMPv6EchoReply, ICMPv6ND_NS, ICMPv6ND_NA, ICMPv6ND_RA, ICMPv6DestUnreach, ICMPv6PacketTooBig, ICMPv6TimeExceeded, ICMPv6MLReport2, ARP, Raw, get_if_list, conf, DNS, DNSQR, DNSRR, Ether
@@ -12,7 +12,7 @@ import struct
 import os
 import socket
 import csv
-from .database import NetGuardDatabase
+from .database import FlowSentrixDatabase
 
 # DNS query type mapping
 DNS_QTYPES = {
@@ -44,13 +44,13 @@ class PacketSniffer:
     Production-ready with statistics tracking, database storage, and robust error handling.
     """
     
-    def __init__(self, interface=None, db_path="data/netguard.db", csv_file=None, on_packet=None):
+    def __init__(self, interface=None, db_path="data/flowsentrix.db", csv_file=None, on_packet=None):
         """
         Initialize the packet sniffer with Wireshark-inspired features.
         
         Args:
             interface: Network interface to sniff (None = all interfaces)
-            db_path: Path to SQLite database file (default: data/netguard.db)
+            db_path: Path to SQLite database file (default: data/flowsentrix.db)
             csv_file: Optional CSV file for real-time logging
             on_packet: Optional callback(packet_data) for external consumers (CLI/GUI).
                        When set, replaces built-in console output.
@@ -103,7 +103,7 @@ class PacketSniffer:
         self.local_ip = self._get_local_ip()
         
         # Initialize database
-        self.db = NetGuardDatabase(db_path)
+        self.db = FlowSentrixDatabase(db_path)
         self.session_id = None
         
         # Initialize CSV logging if requested
@@ -1787,7 +1787,7 @@ class PacketSniffer:
     def _print_session_summary(self):
         """Print comprehensive traffic statistics summary with enhanced details."""
         print("\n" + "=" * 80)
-        print("🛡️  NetGuard Session Summary - Wireshark-Inspired Analysis")
+        print("🛡️  FlowSentrix Session Summary - Wireshark-Inspired Analysis")
         print("=" * 80)
         print(f"Total Packets Captured: {self.packets_captured}")
         print(f"Total Data Transferred: {self._format_bytes(self.total_bytes)}")
@@ -1926,7 +1926,7 @@ class PacketSniffer:
             self.capture_start_time = datetime.now()
             
             if not self.quiet:
-                print(f"🛡️  NetGuard Wireshark-Inspired Monitoring Started")
+                print(f"🛡️  FlowSentrix Wireshark-Inspired Monitoring Started")
                 print(f"Interface: {self.interface or 'All'}")
                 print(f"Local IPs: {', '.join(self.local_ip)}")
                 print(f"Database: {self.db_path}")
@@ -1942,7 +1942,7 @@ class PacketSniffer:
             # Start worker thread for packet processing
             self._worker_thread = threading.Thread(
                 target=self._packet_worker,
-                name="NetGuard-PacketWorker",
+                name="FlowSentrix-PacketWorker",
                 daemon=True
             )
             self._worker_thread.start()
@@ -1969,7 +1969,7 @@ class PacketSniffer:
         except PermissionError:
             if not self.quiet:
                 print("[!] Error: Root/sudo privileges required for packet capture!")
-                print("    Run with: sudo python3 netguard.py")
+                print("    Run with: sudo python3 flowsentrix.py")
             raise
             
         except ValueError as e:

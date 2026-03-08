@@ -24,7 +24,7 @@ build/
 *.sqlite
 *.sqlite3
 data/*.db
-data/netguard.db
+data/flowsentrix.db
 
 # Logs
 logs/*.log

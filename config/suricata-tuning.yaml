@@ -1,5 +1,5 @@
 # =============================================================================
-# NetGuard — Suricata YAML Tuning Sections
+# FlowSentrix — Suricata YAML Tuning Sections
 # =============================================================================
 # Copy the relevant sections below into /etc/suricata/suricata.yaml
 # to tune Suricata's engine for this dual-stack IPv4/IPv6 environment

@@ -1,5 +1,5 @@
 """
-NetGuard CLI Display
+FlowSentrix CLI Display
 Color-coded packet and table formatting with Rich.
 """
 from rich.console import Console

@@ -1,5 +1,5 @@
 """
-NetGuard Database Module
+FlowSentrix Database Module
 SQLite-based storage for connection/flow-level network analysis.
 
 Architecture:
@@ -19,13 +19,13 @@ from datetime import datetime
 from typing import Dict, Optional, List
 
 
-class NetGuardDatabase:
+class FlowSentrixDatabase:
     """
     Manages SQLite database for connection-level network analysis.
     Stores flow summaries instead of individual packets.
     """
     
-    def __init__(self, db_path="data/netguard.db"):
+    def __init__(self, db_path="data/flowsentrix.db"):
         """
         Initialize database connection.
         
@@ -421,12 +421,25 @@ class NetGuardDatabase:
     def flush_connections(self, flows: list, session_id: int = None):
         """Bulk insert connection/flow summaries from the tracker.
         
+        During live capture, the tracker sends ALL flows on every flush
+        (each flow has cumulative packet/byte counts). We must DELETE
+        old rows for this session first, then INSERT the fresh snapshot.
+        Otherwise the same flow gets duplicated on every flush,
+        massively inflating SUM(total_packets) / SUM(total_bytes).
+        
         Args:
             flows: List of flow dicts from ConnectionTracker.get_flows()
             session_id: Current capture session ID
         """
         with self._lock:
             try:
+                # Clear previous snapshot for this session to avoid duplicates
+                if session_id is not None:
+                    self.cursor.execute(
+                        "DELETE FROM connections WHERE session_id = ?",
+                        (session_id,)
+                    )
+
                 for flow in flows:
                     self.cursor.execute("""
                         INSERT INTO connections (

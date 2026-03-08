@@ -1,5 +1,5 @@
 # =============================================================================
-# NetGuard — DO NOT SUPPRESS List
+# FlowSentrix — DO NOT SUPPRESS List
 # =============================================================================
 # Alerts, signatures, and IP pairs in this file must NEVER be suppressed,
 # whitelisted, or severity-demoted — regardless of any other tuning rule.
@@ -17,7 +17,7 @@
 confirmed_alerts:
 
   - name: "SSH Password Spray (10+ targets)"
-    signature_pattern: "NETGUARD BRUTE-FORCE SSH Password Spray"
+    signature_pattern: "FLOWSENTRIX BRUTE-FORCE SSH Password Spray"
     source_ip: "10.92.237.60"
     target_ip: "10.92.237.82"
     target_port: 22
@@ -28,7 +28,7 @@ confirmed_alerts:
       10.92.237.82:22. This is a lateral movement indicator.
 
   - name: "SSH Brute Force Detected"
-    signature_pattern: "NETGUARD BRUTE-FORCE SSH Brute Force Detected"
+    signature_pattern: "FLOWSENTRIX BRUTE-FORCE SSH Brute Force Detected"
     source_ip: "10.92.237.60"
     target_ip: "10.92.237.82"
     target_port: 22

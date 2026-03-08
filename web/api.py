@@ -1,5 +1,5 @@
 """
-NetGuard Web API — FastAPI backend serving dashboard data from SQLite.
+FlowSentrix Web API — FastAPI backend serving dashboard data from SQLite.
 Run: python web/api.py
 """
 import sys
@@ -12,9 +12,9 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from core.database import NetGuardDatabase
+from core.database import FlowSentrixDatabase
 
-app = FastAPI(title="NetGuard API", version="1.0.0")
+app = FastAPI(title="FlowSentrix API", version="1.0.0")
 
 # Allow frontend dev server
 app.add_middleware(
@@ -24,7 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "netguard.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "flowsentrix.db")
 
 # ── Startup migration: reclassify alerts to 3-tier schema ──
 # CRITICAL(HIGH)=1, WARNING(MEDIUM)=2, INFO(LOW)=3
@@ -66,7 +66,7 @@ except Exception:
 
 
 def get_db():
-    return NetGuardDatabase(db_path=DB_PATH)
+    return FlowSentrixDatabase(db_path=DB_PATH)
 
 
 def get_read_conn():
@@ -106,7 +106,13 @@ def fmt_count(n):
 def get_stats(
     session_id: int = Query(0, ge=0, description="Filter by session ID (0 = all)"),
 ):
-    """Get cumulative dashboard stats, optionally scoped to a session."""
+    """Get cumulative dashboard stats, optionally scoped to a session.
+
+    During an active capture, override the live session's DB-derived
+    totals with the capture manager's pcap-based counters.  The DB's
+    connection data comes from live tshark which can differ from
+    dumpcap's pcapng output (the ground truth).
+    """
     db = get_db()
     try:
         if session_id > 0:
@@ -116,9 +122,39 @@ def get_stats(
         else:
             stats = db.get_cumulative_stats()
 
+        total_packets = stats["total_packets"]
+        total_bytes = stats["total_bytes"]
+
+        # ── live capture override ──
+        # During an active capture the DB's connection-table sums are
+        # derived from live tshark (independent process) which can count
+        # slightly more than what dumpcap actually writes to the pcapng.
+        # Use the pcap monitor's counts — they are parsed directly from
+        # the pcapng block headers and match the ground truth.
+        if capture_mgr.state == "capturing" and capture_mgr.sniffer:
+            live_session = capture_mgr.sniffer.session_id
+            if session_id == 0 or session_id == live_session:
+                # Subtract the DB's connection-table total for the live
+                # session and add the pcap monitor's authoritative count.
+                conn = get_read_conn()
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT COALESCE(SUM(total_packets),0), COALESCE(SUM(total_bytes),0) "
+                    "FROM connections WHERE session_id = ?",
+                    (live_session,)
+                )
+                db_live_pkts, db_live_bytes = cur.fetchone()
+                conn.close()
+
+                pcap_pkts = capture_mgr.sniffer.pcap_packets_captured or 0
+                pcap_bytes = capture_mgr.sniffer.pcap_total_bytes or 0
+
+                total_packets = total_packets - db_live_pkts + pcap_pkts
+                total_bytes = total_bytes - db_live_bytes + pcap_bytes
+
         # Format numbers for display
-        pkt_val, pkt_unit = fmt_count(stats["total_packets"])
-        bytes_val, bytes_unit = fmt_bytes(stats["total_bytes"])
+        pkt_val, pkt_unit = fmt_count(total_packets)
+        bytes_val, bytes_unit = fmt_bytes(total_bytes)
 
         # Protocol breakdown — ALL protocols, percentage by packet count
         colors = [
@@ -147,6 +183,77 @@ def get_stats(
         }
     finally:
         db.close()
+
+
+@app.get("/api/stats/timeseries")
+def get_timeseries(
+    session_id: int = Query(0, ge=0, description="Filter by session ID (0 = all)"),
+):
+    """Return time-series arrays for dashboard sparklines.
+
+    Returns 3 arrays (max 12 points each):
+      - packets: packet counts per time bucket
+      - bytes: byte sums per time bucket
+      - sessions: cumulative session count (all) or alerts-per-hour (single session)
+    """
+    conn = get_read_conn()
+    cursor = conn.cursor()
+
+    try:
+        if session_id > 0:
+            # ── Single session: bucket connections by hour ──
+            cursor.execute("""
+                SELECT strftime('%Y-%m-%d %H:00', start_time) as bucket,
+                       SUM(total_packets) as pkts,
+                       SUM(total_bytes) as bts
+                FROM connections
+                WHERE session_id = ? AND start_time IS NOT NULL
+                GROUP BY bucket
+                ORDER BY bucket
+            """, (session_id,))
+            rows = cursor.fetchall()
+
+            packets = [r[1] for r in rows] if rows else [0]
+            bytes_arr = [r[2] for r in rows] if rows else [0]
+
+            # Alerts per hour for this session
+            cursor.execute("""
+                SELECT strftime('%Y-%m-%d %H:00', timestamp) as bucket,
+                       COUNT(*) as cnt
+                FROM alerts
+                WHERE session_id = ? AND timestamp IS NOT NULL
+                GROUP BY bucket
+                ORDER BY bucket
+            """, (session_id,))
+            alert_rows = cursor.fetchall()
+            sessions_arr = [r[1] for r in alert_rows] if alert_rows else [0]
+        else:
+            # ── All sessions: one point per session ──
+            cursor.execute("""
+                SELECT id, total_packets, total_bytes
+                FROM sessions
+                ORDER BY id ASC
+            """)
+            rows = cursor.fetchall()
+
+            packets = [r[1] or 0 for r in rows] if rows else [0]
+            bytes_arr = [r[2] or 0 for r in rows] if rows else [0]
+            # Running session count (1, 2, 3, ...)
+            sessions_arr = list(range(1, len(rows) + 1)) if rows else [0]
+
+        # Cap to last 12 data points for sparkline readability
+        MAX_POINTS = 12
+        packets = packets[-MAX_POINTS:]
+        bytes_arr = bytes_arr[-MAX_POINTS:]
+        sessions_arr = sessions_arr[-MAX_POINTS:]
+
+        return {
+            "packets": packets,
+            "bytes": bytes_arr,
+            "sessions": sessions_arr,
+        }
+    finally:
+        conn.close()
 
 
 @app.get("/api/alerts")
@@ -184,12 +291,14 @@ def get_alerts(
         params.append(proto)
 
     if date_from:
+        date_from = date_from.replace(' ', 'T')
         where_clauses.append("timestamp >= ?")
         params.append(date_from)
 
     if date_to:
+        date_to = date_to.replace(' ', 'T')
         if len(date_to) == 10:
-            date_to += " 23:59:59"
+            date_to += "T23:59:59"
         where_clauses.append("timestamp <= ?")
         params.append(date_to)
 
@@ -199,8 +308,17 @@ def get_alerts(
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
-    # Severity counts — scoped to the same filters/session as the alert list
-    cursor.execute(f"SELECT severity_num, COUNT(*) FROM alerts {where_sql} GROUP BY severity_num", list(params))
+    # Severity counts — use filters EXCEPT severity so the stat cards
+    # always show totals for each level regardless of which card is active.
+    card_clauses = [c for c in where_clauses if c != "severity_num = ?"]
+    card_params = list(params)
+    if severity and "severity_num = ?" in where_clauses:
+        sev_idx = where_clauses.index("severity_num = ?")
+        # Remove the corresponding param (same positional index)
+        card_params = [p for j, p in enumerate(params) if j != sev_idx]
+    card_where = ("WHERE " + " AND ".join(card_clauses)) if card_clauses else ""
+
+    cursor.execute(f"SELECT severity_num, COUNT(*) FROM alerts {card_where} GROUP BY severity_num", card_params)
     total_sev = {r[0]: r[1] for r in cursor.fetchall()}
     total_high = total_sev.get(1, 0)
     total_medium = total_sev.get(2, 0)
@@ -330,10 +448,12 @@ def get_connections(
         params.append(f"%{tag}%")
 
     if date_from:
+        date_from = date_from.replace('T', ' ')
         where_clauses.append("start_time >= ?")
         params.append(date_from)
 
     if date_to:
+        date_to = date_to.replace('T', ' ')
         # If only date given (no time), extend to end of day
         if len(date_to) == 10:
             date_to += " 23:59:59"
@@ -370,9 +490,10 @@ def get_connections(
     cursor.execute("SELECT DISTINCT protocol FROM connections ORDER BY protocol")
     all_protos = [r[0] for r in cursor.fetchall()]
 
-    # Get distinct tags for filter dropdown
-    cursor.execute("SELECT DISTINCT tags FROM connections WHERE tags != '' AND tags IS NOT NULL ORDER BY tags")
-    all_tags = [r[0] for r in cursor.fetchall()]
+    # Get distinct tags for filter dropdown (split comma-separated values)
+    cursor.execute("SELECT DISTINCT tags FROM connections WHERE tags != '' AND tags IS NOT NULL")
+    raw_tags = [r[0] for r in cursor.fetchall()]
+    all_tags = sorted({t.strip() for raw in raw_tags for t in raw.split(',') if t.strip()})
 
     conn.close()
 
@@ -506,7 +627,7 @@ class CaptureManager:
             # Run capture in background thread
             self._thread = threading.Thread(
                 target=self._run_capture,
-                name="NetGuard-WebCapture",
+                name="FlowSentrix-WebCapture",
                 daemon=True,
             )
             self._thread.start()
@@ -585,7 +706,7 @@ class CaptureManager:
                 self._reprocessing_active = True
                 reprocess_thread = threading.Thread(
                     target=self._background_reprocess,
-                    name="NetGuard-Reprocess",
+                    name="FlowSentrix-Reprocess",
                     daemon=True,
                 )
                 reprocess_thread.start()
@@ -1029,8 +1150,8 @@ except Exception:
 
 # Fallback descriptions when Gemini is unavailable
 _FALLBACK_DESCRIPTIONS = {
-    "NETGUARD BRUTE": "🔒 **Brute-force attack detected.** Someone is attempting to guess login credentials by trying many passwords rapidly. This is a confirmed attack — whether from an internal or external source.\n\n🛡️ **Action:** Block the source IP immediately. Check if any logins were successful. If the source is internal, investigate that device for compromise.",
-    "NETGUARD SCAN": "🔍 **Port scan detected.** A host is probing network ports to discover open services. This is active reconnaissance, often a precursor to exploitation. If the source is an internal IP, the device may be compromised.\n\n🛡️ **Action:** Block the source IP. If internal, investigate the device for malware. Review exposed services on the targeted ports.",
+    "FLOWSENTRIX BRUTE": "🔒 **Brute-force attack detected.** Someone is attempting to guess login credentials by trying many passwords rapidly. This is a confirmed attack — whether from an internal or external source.\n\n🛡️ **Action:** Block the source IP immediately. Check if any logins were successful. If the source is internal, investigate that device for compromise.",
+    "FLOWSENTRIX SCAN": "🔍 **Port scan detected.** A host is probing network ports to discover open services. This is active reconnaissance, often a precursor to exploitation. If the source is an internal IP, the device may be compromised.\n\n🛡️ **Action:** Block the source IP. If internal, investigate the device for malware. Review exposed services on the targeted ports.",
     "Beaconing": "📡 **Beaconing pattern detected.** A device is connecting to the same destination at regular intervals. This pattern is characteristic of malware command-and-control (C2) callbacks.\n\n🛡️ **Action:** Identify which process is making these connections. Check if the destination is legitimate.",
     "Data Exfiltration": "📤 **Potential data exfiltration.** An unusually large amount of data is being uploaded to an external destination. This could indicate data theft.\n\n🛡️ **Action:** Verify if this is authorized activity (backup, upload). Check the destination reputation.",
     "Traffic Anomaly": "📊 **Traffic anomaly detected.** Network traffic to this destination significantly exceeds the historical baseline. Could indicate data staging or compromise.\n\n🛡️ **Action:** Compare with normal usage patterns. Investigate if the volume spike is expected.",
@@ -1043,16 +1164,16 @@ _FALLBACK_DESCRIPTIONS = {
 
 
 def _get_ai_key():
-    """Read Groq API key from ~/.netguard/config.json."""
+    """Read Groq API key from ~/.flowsentrix/config.json."""
     try:
         import json
         # When running as root (sudo), ~ = /root. Check SUDO_USER's home too.
         candidates = [
-            os.path.expanduser("~/.netguard/config.json"),
+            os.path.expanduser("~/.flowsentrix/config.json"),
         ]
         sudo_user = os.environ.get("SUDO_USER", "")
         if sudo_user:
-            candidates.insert(0, f"/home/{sudo_user}/.netguard/config.json")
+            candidates.insert(0, f"/home/{sudo_user}/.flowsentrix/config.json")
         for path in candidates:
             if os.path.exists(path):
                 with open(path) as f:
@@ -1103,7 +1224,7 @@ def _call_ai(alert_data: dict) -> str:
     src_info = f"{src_ip} ({src_domain})" if src_domain else src_ip
     dst_info = f"{dst_ip} ({dst_domain})" if dst_domain else dst_ip
 
-    prompt = f"""You are a network security analyst for NetGuard, a network intrusion detection system.
+    prompt = f"""You are a network security analyst for FlowSentrix, a network intrusion detection system.
 Analyze this security alert and provide:
 1. **What's happening** — Explain in 2-3 sentences what this alert means. Be specific about the IPs, ports, and protocols involved. If the domain resolves to a known legitimate service (Google, Cloudflare, AWS, etc.), explicitly mention this and say it's likely a false positive.
 2. **Risk level** — Is this a real threat or likely benign? One sentence.
@@ -1139,7 +1260,7 @@ Alert details:
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
-            "User-Agent": "NetGuard/1.0",
+            "User-Agent": "FlowSentrix/1.0",
         },
         method="POST",
     )
@@ -1231,8 +1352,8 @@ def check_ip_reputation(ip: str):
     config_paths = []
     sudo_user = os.environ.get('SUDO_USER')
     if sudo_user:
-        config_paths.append(f"/home/{sudo_user}/.netguard/config.json")
-    config_paths.append(os.path.expanduser("~/.netguard/config.json"))
+        config_paths.append(f"/home/{sudo_user}/.flowsentrix/config.json")
+    config_paths.append(os.path.expanduser("~/.flowsentrix/config.json"))
 
     api_key = ""
     for p in config_paths:
@@ -1246,7 +1367,7 @@ def check_ip_reputation(ip: str):
             pass
 
     if not api_key:
-        return {"ok": False, "error": "AbuseIPDB API key not configured. Add 'abuseipdb_api_key' to ~/.netguard/config.json"}
+        return {"ok": False, "error": "AbuseIPDB API key not configured. Add 'abuseipdb_api_key' to ~/.flowsentrix/config.json"}
 
     # Check if private IP
     if (ip.startswith('10.') or ip.startswith('192.168.') or ip.startswith('172.16.') or
@@ -1260,7 +1381,7 @@ def check_ip_reputation(ip: str):
         req = urllib.request.Request(url)
         req.add_header('Key', api_key)
         req.add_header('Accept', 'application/json')
-        req.add_header('User-Agent', 'NetGuard/1.0')
+        req.add_header('User-Agent', 'FlowSentrix/1.0')
 
         with urllib.request.urlopen(req, timeout=8) as resp:
             data = json.loads(resp.read().decode())
@@ -1323,9 +1444,11 @@ def export_connections_csv(
         where_clauses.append("tags LIKE ?")
         params.append(f"%{tag}%")
     if date_from:
+        date_from = date_from.replace('T', ' ')
         where_clauses.append("start_time >= ?")
         params.append(date_from)
     if date_to:
+        date_to = date_to.replace('T', ' ')
         if len(date_to) == 10:
             date_to += " 23:59:59"
         where_clauses.append("start_time <= ?")
@@ -1361,7 +1484,7 @@ def export_connections_csv(
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=netguard_connections.csv"}
+        headers={"Content-Disposition": "attachment; filename=flowsentrix_connections.csv"}
     )
 
 class AnalyzeConnectionRequest(BaseModel):
@@ -1403,7 +1526,7 @@ def analyze_connection(req: AnalyzeConnectionRequest):
 
     api_key = _get_ai_key()
     if not api_key:
-        return {"ok": True, "explanation": "⚙️ **Connection profile.** Configure an AI API key in ~/.netguard/config.json to get AI-powered connection analysis.", "cached": False, "source": "fallback"}
+        return {"ok": True, "explanation": "⚙️ **Connection profile.** Configure an AI API key in ~/.flowsentrix/config.json to get AI-powered connection analysis.", "cached": False, "source": "fallback"}
 
     # Reverse DNS
     src_domain, dst_domain = "", ""
@@ -1456,7 +1579,7 @@ def analyze_connection(req: AnalyzeConnectionRequest):
     dst_service = port_services.get(req.dst_port, f'port {req.dst_port}')
     src_service = port_services.get(req.src_port, f'port {req.src_port}')
 
-    prompt = f"""You are a network security analyst for NetGuard IDS. Analyze this connection with technical depth.
+    prompt = f"""You are a network security analyst for FlowSentrix IDS. Analyze this connection with technical depth.
 
 Provide:
 1. **Service identification** — What service/application is this? Identify using the destination port, protocol, and resolved domain. Be specific (e.g., "HTTPS to Google's CDN" not just "web traffic").
@@ -1491,7 +1614,7 @@ Connection:
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
-            "User-Agent": "NetGuard/1.0",
+            "User-Agent": "FlowSentrix/1.0",
         },
         method="POST",
     )
@@ -1535,7 +1658,7 @@ def check_session(session_id: int):
 
 
 if __name__ == "__main__":
-    print(f"📡 NetGuard API starting on http://localhost:8000")
+    print(f"📡 FlowSentrix API starting on http://localhost:8000")
     print(f"📂 Database: {DB_PATH}")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 

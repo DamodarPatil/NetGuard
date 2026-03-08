@@ -1,39 +1,59 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Network, Shield, Settings, Zap, Radio } from 'lucide-react'
+import { LayoutDashboard, Network, Shield, Settings, Radio, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import flowsentrixLogo from '../assets/flowsentrix-logo.svg'
 
-const Sidebar = () => {
+const Sidebar = ({ collapsed, onToggle }) => {
     return (
-        <aside className="sidebar">
-            <div className="sidebar-brand">
-                <div className="sidebar-brand-icon">
-                    <Zap size={22} />
-                </div>
-                <div className="sidebar-brand-text">
-                    <h2>NetGuard</h2>
-                    <span>Command Center</span>
-                </div>
+        <aside className={`sidebar ${collapsed ? 'sidebar-collapsed' : ''}`}>
+            {/* Toggle row — sits above everything */}
+            <div className="sidebar-toggle-row">
+                <button
+                    onClick={onToggle}
+                    className="sidebar-toggle-btn"
+                    title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                >
+                    {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+                </button>
             </div>
 
+            {/* Brand */}
+            <div className="sidebar-brand">
+                <div className="sidebar-brand-icon">
+                    <img src={flowsentrixLogo} alt="FlowSentrix" width={24} height={24} />
+                </div>
+                {!collapsed && (
+                    <div className="sidebar-brand-text">
+                        <h2>FlowSentrix</h2>
+                    </div>
+                )}
+            </div>
+
+            {/* Navigation */}
             <nav className="sidebar-nav">
-                <NavLink to="/capture" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                <NavLink to="/capture" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                    title="Capture">
                     <Radio size={18} />
-                    Capture
+                    {!collapsed && 'Capture'}
                 </NavLink>
-                <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end>
+                <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end
+                    title="Dashboard">
                     <LayoutDashboard size={18} />
-                    Dashboard
+                    {!collapsed && 'Dashboard'}
                 </NavLink>
-                <NavLink to="/connections" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                <NavLink to="/connections" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                    title="Connections">
                     <Network size={18} />
-                    Connections
+                    {!collapsed && 'Connections'}
                 </NavLink>
-                <NavLink to="/alerts" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                <NavLink to="/alerts" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                    title="Alerts">
                     <Shield size={18} />
-                    Alerts
+                    {!collapsed && 'Alerts'}
                 </NavLink>
-                <NavLink to="/settings" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                <NavLink to="/settings" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                    title="Settings">
                     <Settings size={18} />
-                    Settings
+                    {!collapsed && 'Settings'}
                 </NavLink>
             </nav>
         </aside>

@@ -1,7 +1,7 @@
 # =============================================================================
-# NetGuard — Master Behavioral Tuning Configuration
+# FlowSentrix — Master Behavioral Tuning Configuration
 # =============================================================================
-# This file controls NetGuard's BehaviorEngine thresholds, whitelist
+# This file controls FlowSentrix's BehaviorEngine thresholds, whitelist
 # behavior, and per-detector suppression logic.
 #
 # Loaded by config/__init__.py → used by core/behavior_engine.py
@@ -22,7 +22,7 @@ global:
   # IPs matching any entry are exempt from behavioral alerting.
   allowlist_file: "config/ip_allowlist.txt"
 
-  # Deployment start date (ISO 8601). Set this to the date NetGuard was
+  # Deployment start date (ISO 8601). Set this to the date FlowSentrix was
   # first installed. Used to compute whether learning period has elapsed.
   # If not set, the first capture session timestamp from DB is used.
   deployment_date: "2026-03-01"

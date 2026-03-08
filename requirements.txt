@@ -1,4 +1,4 @@
-# NetGuard - Python Dependencies
+# FlowSentrix - Python Dependencies
 # Install: pip install -r requirements.txt
 
 # Core capture engine

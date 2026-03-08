@@ -14,21 +14,10 @@ const PROTO_COLORS = {
 }
 
 const StatBox = ({ label, value, sub, color = '#e0e0e0' }) => (
-    <div style={{
-        flex: 1, minWidth: '140px',
-        background: 'rgba(255,255,255,0.03)',
-        border: '1px solid rgba(255,255,255,0.06)',
-        borderRadius: '12px',
-        padding: '1rem 1.25rem',
-        textAlign: 'center',
-    }}>
-        <div style={{ fontSize: '0.72rem', color: '#5a5a6e', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.4rem' }}>
-            {label}
-        </div>
-        <div style={{ fontSize: '1.6rem', fontWeight: 700, color, fontFamily: 'monospace', lineHeight: 1.1 }}>
-            {value}
-        </div>
-        {sub && <div style={{ fontSize: '0.75rem', color: '#3d3d4e', marginTop: '0.2rem' }}>{sub}</div>}
+    <div className="stat-box">
+        <div className="stat-box-label">{label}</div>
+        <div className="stat-box-value" style={{ color }}>{value}</div>
+        {sub && <div className="stat-box-sub">{sub}</div>}
     </div>
 )
 
@@ -38,14 +27,13 @@ const Capture = () => {
     const [selectedIface, setSelectedIface] = useState('')
     const [actionError, setActionError] = useState('')
     const [actionLoading, setActionLoading] = useState(false)
-    const [packets, setPackets] = useState([])      // What's rendered (frozen when scrolled up)
+    const [packets, setPackets] = useState([])
     const lastPacketId = useRef(0)
     const feedRef = useRef(null)
     const prevState = useRef(null)
     const isNearBottom = useRef(true)
-    const pendingPackets = useRef([])                // Buffer: holds new packets while scrolled up
+    const pendingPackets = useRef([])
 
-    // Flush pending packets into display
     const flushPending = useCallback(() => {
         if (pendingPackets.current.length === 0) return
         setPackets(prev => {
@@ -55,7 +43,6 @@ const Capture = () => {
         })
     }, [])
 
-    // Fetch interfaces on mount
     useEffect(() => {
         fetch(`${API}/api/interfaces`)
             .then(r => r.json())
@@ -68,7 +55,6 @@ const Capture = () => {
             .catch(() => { })
     }, [])
 
-    // Fetch status
     const fetchStatus = useCallback(async () => {
         try {
             const r = await fetch(`${API}/api/capture/status`)
@@ -77,7 +63,6 @@ const Capture = () => {
         } catch { }
     }, [])
 
-    // Fetch packets (incremental) — buffers into pending, only renders if at bottom
     const fetchPackets = useCallback(async () => {
         try {
             const r = await fetch(`${API}/api/capture/packets?after_id=${lastPacketId.current}`)
@@ -85,15 +70,12 @@ const Capture = () => {
             if (data.packets && data.packets.length > 0) {
                 lastPacketId.current = data.packets[data.packets.length - 1].id
                 if (isNearBottom.current) {
-                    // At bottom: add directly to displayed packets
                     setPackets(prev => {
                         const merged = [...prev, ...data.packets]
                         return merged.length > 500 ? merged.slice(-500) : merged
                     })
                 } else {
-                    // Scrolled up: buffer silently, don't touch the display
                     pendingPackets.current.push(...data.packets)
-                    // Cap pending buffer
                     if (pendingPackets.current.length > 500) {
                         pendingPackets.current = pendingPackets.current.slice(-500)
                     }
@@ -102,15 +84,12 @@ const Capture = () => {
         } catch { }
     }, [])
 
-    // Initial fetch
     useEffect(() => { fetchStatus() }, [fetchStatus])
 
-    // Detect state transition: active → idle → drain remaining packets
     useEffect(() => {
         const wasActive = prevState.current === 'capturing' || prevState.current === 'stopping' || prevState.current === 'analyzing'
         const nowIdle = status?.state === 'idle'
         prevState.current = status?.state
-
         if (wasActive && nowIdle) {
             fetchPackets()
             setTimeout(fetchPackets, 500)
@@ -118,23 +97,18 @@ const Capture = () => {
         }
     }, [status?.state, fetchPackets])
 
-    // Polling during capture
     useEffect(() => {
         const isActive = status?.state === 'capturing' || status?.state === 'stopping' || status?.state === 'analyzing'
         const statusInterval = isActive ? 1000 : 3000
-
         const statusTimer = setInterval(fetchStatus, statusInterval)
         let packetTimer = null
-        if (isActive) {
-            packetTimer = setInterval(fetchPackets, 500)
-        }
+        if (isActive) { packetTimer = setInterval(fetchPackets, 500) }
         return () => {
             clearInterval(statusTimer)
             if (packetTimer) clearInterval(packetTimer)
         }
     }, [fetchStatus, fetchPackets, status?.state])
 
-    // After packets state updates, scroll to bottom only if following
     useEffect(() => {
         if (isNearBottom.current && feedRef.current) {
             feedRef.current.scrollTop = feedRef.current.scrollHeight
@@ -146,11 +120,7 @@ const Capture = () => {
         const { scrollTop, scrollHeight, clientHeight } = feedRef.current
         const wasNearBottom = isNearBottom.current
         isNearBottom.current = (scrollHeight - scrollTop - clientHeight) < 40
-
-        // User just scrolled back to bottom → flush pending packets
-        if (!wasNearBottom && isNearBottom.current) {
-            flushPending()
-        }
+        if (!wasNearBottom && isNearBottom.current) flushPending()
     }
 
     const handleStart = async () => {
@@ -194,15 +164,15 @@ const Capture = () => {
     const lastCap = status?.last_capture
 
     const stateConfig = {
-        idle: { label: 'Idle', color: '#5a5a6e', bg: 'rgba(90,90,110,0.15)' },
-        capturing: { label: '● LIVE', color: '#00ff73', bg: 'rgba(0,255,115,0.12)' },
-        stopping: { label: '■ Stopping…', color: '#ffaa00', bg: 'rgba(255,170,0,0.12)' },
-        analyzing: { label: '⟳ Analyzing…', color: '#00f3ff', bg: 'rgba(0,243,255,0.12)' },
+        idle: { label: 'Idle', color: '#7d8590', bg: 'rgba(125,133,144,0.15)' },
+        capturing: { label: '● LIVE', color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
+        stopping: { label: '■ Stopping…', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+        analyzing: { label: '⟳ Analyzing…', color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
     }
     const sc = stateConfig[status?.state] || stateConfig.idle
-    const protoColor = (p) => PROTO_COLORS[p] || '#8b8b9b'
+    const protoColor = (p) => PROTO_COLORS[p] || '#7d8590'
 
-    const GRID = '60px 80px 75px 1fr 24px 1fr 60px 2.5fr'
+    const GRID = '60px 80px 75px 1fr 24px 1fr 60px 3.5fr'
 
     return (
         <>
@@ -213,11 +183,8 @@ const Capture = () => {
                         {isActive ? `Capturing on ${status.interface}` : 'Start and monitor live packet capture'}
                     </p>
                 </div>
-                <div style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
-                    padding: '0.5rem 1.2rem', borderRadius: '8px',
-                    background: sc.bg, border: `1px solid ${sc.color}30`,
-                    fontSize: '0.9rem', fontWeight: 600, color: sc.color,
+                <div className="capture-status" style={{
+                    background: sc.bg, border: `1px solid ${sc.color}30`, color: sc.color,
                     ...(isCapturing ? { animation: 'glow-pulse 2s infinite' } : {}),
                 }}>
                     {sc.label}
@@ -225,21 +192,10 @@ const Capture = () => {
             </div>
 
             {/* ── Controls Row ── */}
-            <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.75rem', alignItems: 'stretch', flexWrap: 'wrap' }}>
-                <div className="panel" style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.85rem 1.2rem' }}>
-                    <select
-                        value={selectedIface}
-                        onChange={e => setSelectedIface(e.target.value)}
-                        disabled={isActive}
-                        style={{
-                            padding: '0.55rem 0.85rem',
-                            background: isActive ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.04)',
-                            border: '1px solid rgba(255,255,255,0.08)',
-                            borderRadius: '8px', color: isActive ? '#3d3d4e' : '#e0e0e0',
-                            fontSize: '0.9rem', cursor: isActive ? 'not-allowed' : 'pointer',
-                            outline: 'none', minWidth: '200px',
-                        }}
-                    >
+            <div className="capture-controls">
+                <div className="panel flex-row gap-lg" style={{ flex: '0 0 auto', padding: '0.85rem 1.2rem' }}>
+                    <select value={selectedIface} onChange={e => setSelectedIface(e.target.value)}
+                        disabled={isActive} className="capture-select">
                         <option value="">Select interface…</option>
                         <option value="any">any (all interfaces)</option>
                         {interfaces.map(iface => (
@@ -250,58 +206,31 @@ const Capture = () => {
                     </select>
 
                     {!isActive ? (
-                        <button onClick={handleStart} disabled={actionLoading || !selectedIface}
-                            style={{
-                                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                                padding: '0.55rem 1.75rem', borderRadius: '8px', border: 'none',
-                                background: 'linear-gradient(135deg, rgba(0,255,115,0.25), rgba(0,255,115,0.1))',
-                                color: '#00ff73', fontSize: '0.95rem', fontWeight: 700,
-                                cursor: selectedIface && !actionLoading ? 'pointer' : 'not-allowed',
-                                opacity: selectedIface && !actionLoading ? 1 : 0.4,
-                                whiteSpace: 'nowrap',
-                            }}
-                        >
-                            <Play size={16} fill="#00ff73" />
+                        <button onClick={handleStart} disabled={actionLoading || !selectedIface} className="btn-start">
+                            <Play size={16} fill="#22c55e" />
                             Start
                         </button>
                     ) : (
-                        <button onClick={handleStop} disabled={actionLoading || !isCapturing}
-                            style={{
-                                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                                padding: '0.55rem 1.75rem', borderRadius: '8px', border: 'none',
-                                background: isCapturing ? 'linear-gradient(135deg, rgba(255,42,42,0.25), rgba(255,42,42,0.1))' : 'rgba(255,255,255,0.04)',
-                                color: isCapturing ? '#ff2a2a' : '#5a5a6e',
-                                fontSize: '0.95rem', fontWeight: 700,
-                                cursor: isCapturing ? 'pointer' : 'not-allowed',
-                                opacity: isCapturing ? 1 : 0.5,
-                                whiteSpace: 'nowrap',
-                            }}
-                        >
-                            <Square size={14} fill={isCapturing ? '#ff2a2a' : '#5a5a6e'} />
+                        <button onClick={handleStop} disabled={actionLoading || !isCapturing} className="btn-stop">
+                            <Square size={14} fill={isCapturing ? '#ef4444' : '#7d8590'} />
                             {isStopping ? 'Stopping…' : isAnalyzing ? 'Analyzing…' : 'Stop'}
                         </button>
                     )}
                 </div>
 
-                {/* Live stats bar */}
                 {isActive && (
-                    <div style={{ display: 'flex', gap: '0.5rem', flex: 1, minWidth: '300px' }}>
-                        <StatBox label="Packets" value={status.pcap_packets?.toLocaleString() || '0'} color="#00f3ff" />
-                        <StatBox label="Data" value={status.pcap_bytes_display || '0 B'} color="#bc13fe" />
-                        <StatBox label="Duration" value={status.duration_display || '0s'} color="#ffaa00" />
-                        <StatBox label="PPS" value={status.pps?.toLocaleString() || '0'} sub="pkts/sec" color="#00ff73" />
+                    <div className="capture-live-stats">
+                        <StatBox label="Packets" value={status.pcap_packets?.toLocaleString() || '0'} color="#3b82f6" />
+                        <StatBox label="Data" value={status.pcap_bytes_display || '0 B'} color="#8b5cf6" />
+                        <StatBox label="Duration" value={status.duration_display || '0s'} color="#f59e0b" />
+                        <StatBox label="PPS" value={status.pps?.toLocaleString() || '0'} sub="pkts/sec" color="#22c55e" />
                     </div>
                 )}
             </div>
 
             {/* Error */}
             {actionError && (
-                <div style={{
-                    marginBottom: '0.75rem', padding: '0.75rem 1rem', borderRadius: '8px',
-                    background: 'rgba(255,42,42,0.08)', border: '1px solid rgba(255,42,42,0.2)',
-                    color: '#ff6b6b', fontSize: '0.9rem',
-                    display: 'flex', alignItems: 'center', gap: '0.5rem',
-                }}>
+                <div className="error-banner">
                     <AlertTriangle size={16} />
                     {actionError}
                 </div>
@@ -309,10 +238,10 @@ const Capture = () => {
 
             {/* Analyzing */}
             {isAnalyzing && (
-                <div className="panel" style={{ marginBottom: '0.75rem', textAlign: 'center', padding: '1.5rem' }}>
-                    <Waves size={28} style={{ color: '#00f3ff', marginBottom: '0.5rem', animation: 'pulse 1.5s infinite' }} />
-                    <p style={{ color: '#00f3ff', fontWeight: 600, fontSize: '1rem' }}>Analyzing capture data…</p>
-                    <p style={{ color: '#5a5a6e', fontSize: '0.85rem' }}>Reprocessing pcapng for accurate stats</p>
+                <div className="panel analyzing-banner">
+                    <Waves size={28} className="icon" style={{ animation: 'pulse 1.5s infinite' }} />
+                    <p className="title">Analyzing capture data…</p>
+                    <p className="subtitle">Reprocessing pcapng for accurate stats</p>
                 </div>
             )}
 
@@ -321,84 +250,55 @@ const Capture = () => {
                 <div className="panel" style={{ padding: 0, overflow: 'hidden', marginBottom: '0.75rem' }}>
                     <div className="panel-header">
                         <span className="panel-title">
-                            <Activity size={16} style={{ color: '#00f3ff' }} />
+                            <Activity size={16} style={{ color: '#3b82f6' }} />
                             Packet Feed
-                            <span style={{ fontSize: '0.78rem', color: '#3d3d4e', marginLeft: '0.75rem' }}>
+                            <span className="text-xs" style={{ color: '#484f58', marginLeft: '0.75rem' }}>
                                 {packets.length} packets
                             </span>
                         </span>
                     </div>
 
                     {/* Column header */}
-                    <div style={{
-                        display: 'grid', gridTemplateColumns: GRID,
-                        padding: '0.5rem 1rem',
-                        borderBottom: '1px solid rgba(255,255,255,0.08)',
-                        fontSize: '0.72rem', fontWeight: 600, color: '#5a5a6e',
-                        textTransform: 'uppercase', letterSpacing: '0.08em',
-                    }}>
-                        <span>#</span>
-                        <span>Time</span>
-                        <span>Proto</span>
-                        <span>Source</span>
-                        <span></span>
-                        <span>Destination</span>
+                    <div className="packet-feed-header" style={{ gridTemplateColumns: GRID }}>
+                        <span>#</span><span>Time</span><span>Proto</span>
+                        <span>Source</span><span></span><span>Destination</span>
                         <span style={{ textAlign: 'right', paddingRight: '1rem' }}>Len</span>
                         <span>Info</span>
                     </div>
 
-                    {/* Scrollable feed — Wireshark style: stays where you scroll */}
-                    <div
-                        ref={feedRef}
-                        onScroll={handleScroll}
-                        style={{
-                            maxHeight: '500px',
-                            overflowY: 'auto',
-                            overflowX: 'hidden',
-                            fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-                            fontSize: '0.82rem',
-                            lineHeight: '1.75',
-                        }}
-                    >
+                    {/* Scrollable feed */}
+                    <div ref={feedRef} onScroll={handleScroll} className="packet-feed">
                         {packets.slice(-150).map((pkt, i) => {
                             const pc = protoColor(pkt.proto)
                             const isOut = pkt.direction === 'OUTGOING'
                             const isIn = pkt.direction === 'INCOMING'
                             return (
-                                <div key={pkt.id} style={{
-                                    display: 'grid', gridTemplateColumns: GRID,
-                                    padding: '0.2rem 1rem',
-                                    borderBottom: '1px solid rgba(255,255,255,0.02)',
-                                    background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)',
-                                    alignItems: 'center',
-                                }}>
-                                    <span style={{ color: '#5a5a6e' }}>{pkt.num}</span>
+                                <div key={pkt.id} className="packet-row" style={{ gridTemplateColumns: GRID }}>
+                                    <span className="text-muted">{pkt.num}</span>
                                     <span style={{ color: '#6e6e82' }}>{pkt.time.toFixed(3)}s</span>
                                     <span style={{ color: pc, fontWeight: 700 }}>{pkt.proto}</span>
                                     <span style={{
-                                        color: isOut ? '#00ff73' : '#e0e0e0',
+                                        color: isOut ? '#22c55e' : '#e6edf3',
                                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                                     }}>{pkt.src}</span>
                                     <span style={{
-                                        color: isOut ? '#00ff73' : isIn ? '#6ec6ff' : '#3d3d4e',
+                                        color: isOut ? '#22c55e' : isIn ? '#6ec6ff' : '#484f58',
                                         fontWeight: 700, textAlign: 'center',
                                     }}>→</span>
                                     <span style={{
-                                        color: isIn ? '#6ec6ff' : '#e0e0e0',
+                                        color: isIn ? '#6ec6ff' : '#e6edf3',
                                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                                     }}>{pkt.dst}</span>
                                     <span style={{ color: '#6e6e82', textAlign: 'right', paddingRight: '1rem' }}>{pkt.length}</span>
                                     <span style={{
-                                        color: '#8b8b9b', paddingLeft: '0.25rem',
+                                        color: '#7d8590', paddingLeft: '0.25rem',
                                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                                     }}>{pkt.info}</span>
                                 </div>
                             )
                         })}
                         {isCapturing && packets.length === 0 && (
-                            <div style={{ padding: '2rem', textAlign: 'center', color: '#3d3d4e', fontSize: '0.9rem' }}>
-                                Waiting for packets…
-                            </div>
+                            <div className="waiting-text">Waiting for packets…</div>
                         )}
                     </div>
                 </div>
@@ -409,23 +309,19 @@ const Capture = () => {
                 <div className="panel">
                     <div className="panel-header">
                         <span className="panel-title">
-                            <CheckCircle size={18} style={{ color: '#00ff73' }} />
+                            <CheckCircle size={18} style={{ color: '#22c55e' }} />
                             Capture Complete
                         </span>
                     </div>
-                    <div style={{ padding: '1.25rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                        <StatBox label="Packets" value={lastCap.packets?.toLocaleString() || '0'} color="#00f3ff" />
-                        <StatBox label="Data" value={lastCap.bytes_display || '0 B'} color="#bc13fe" />
-                        <StatBox label="Duration" value={lastCap.duration_display || '—'} color="#ffaa00" />
+                    <div className="packet-summary">
+                        <StatBox label="Packets" value={lastCap.packets?.toLocaleString() || '0'} color="#3b82f6" />
+                        <StatBox label="Data" value={lastCap.bytes_display || '0 B'} color="#8b5cf6" />
+                        <StatBox label="Duration" value={lastCap.duration_display || '—'} color="#f59e0b" />
                         <StatBox label="Session" value={`#${lastCap.session_id || '—'}`} color="#6ec6ff" />
                     </div>
                     {lastCap.pcap_file && (
-                        <div style={{
-                            margin: '0 1.25rem 1.25rem', padding: '0.65rem 1rem', borderRadius: '8px',
-                            background: 'rgba(0,243,255,0.05)', border: '1px solid rgba(0,243,255,0.1)',
-                            fontSize: '0.85rem', color: '#5a5a6e',
-                        }}>
-                            📁 <span style={{ color: '#e0e0e0', fontFamily: 'monospace' }}>{lastCap.pcap_file}</span>
+                        <div className="pcap-file-box">
+                            📁 <span style={{ color: '#e6edf3', fontFamily: 'monospace' }}>{lastCap.pcap_file}</span>
                         </div>
                     )}
                 </div>
@@ -433,23 +329,27 @@ const Capture = () => {
 
             {/* Empty state */}
             {!isActive && !lastCap && packets.length === 0 && (
-                <div className="panel" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
-                    <MonitorSpeaker size={48} style={{ color: '#1a1a2e', marginBottom: '1rem' }} />
-                    <p style={{ color: '#5a5a6e', marginBottom: '0.5rem', fontSize: '1rem' }}>No capture running</p>
-                    <p style={{ color: '#3d3d4e', fontSize: '0.9rem' }}>
-                        Select an interface and click <span style={{ color: '#00ff73' }}>Start</span> to begin capturing packets.
-                    </p>
-                    <p style={{ color: '#3d3d4e', fontSize: '0.82rem', marginTop: '0.75rem' }}>
-                        ⚠ API must be started with <span style={{ color: '#ffaa00', fontFamily: 'monospace' }}>sudo</span> for capture to work.
-                    </p>
+                <div className="panel">
+                    <div className="empty-state">
+                        <div className="empty-state-icon">
+                            <MonitorSpeaker size={32} />
+                        </div>
+                        <h3 className="empty-state-title">No capture running</h3>
+                        <p className="empty-state-desc">
+                            Select a network interface above and click <span style={{ color: '#22c55e', fontWeight: 600 }}>Start Capture</span> to begin monitoring traffic.
+                        </p>
+                        <p style={{ color: '#484f58', fontSize: '0.75rem', marginTop: '0.75rem' }}>
+                            ⚠ API must be started with <span style={{ color: '#f59e0b', fontFamily: 'monospace' }}>sudo</span> for capture to work.
+                        </p>
+                    </div>
                 </div>
             )}
 
             <style>{`
                 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
                 @keyframes glow-pulse {
-                    0%, 100% { box-shadow: 0 0 8px rgba(0,255,115,0.2); }
-                    50% { box-shadow: 0 0 20px rgba(0,255,115,0.4); }
+                    0%, 100% { box-shadow: 0 0 8px rgba(34,197,94,0.2); }
+                    50% { box-shadow: 0 0 20px rgba(34,197,94,0.4); }
                 }
             `}</style>
         </>

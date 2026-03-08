@@ -1,5 +1,5 @@
 """
-Suricata IDS Integration for NetGuard.
+Suricata IDS Integration for FlowSentrix.
 
 Manages Suricata as a subprocess for real-time threat detection.
 Suricata runs as Process 3 alongside dumpcap (capture) and tshark (display),

@@ -1,8 +1,8 @@
-# NetGuard 🛡️
+# FlowSentrix 🛡️
 
 **Real-time network traffic analyzer & intrusion detection system with CLI and Web GUI.**
 
-NetGuard captures live network traffic using tshark, detects threats with Suricata IDS rules, performs behavioral analysis (beaconing, data exfiltration, anomaly detection), and provides both a hacker-style CLI shell and a modern dark-mode web dashboard.
+FlowSentrix captures live network traffic using tshark, detects threats with Suricata IDS rules, performs behavioral analysis (beaconing, data exfiltration, anomaly detection), and provides both a hacker-style CLI shell and a modern dark-mode web dashboard.
 
 ---
 
@@ -43,7 +43,7 @@ NetGuard captures live network traffic using tshark, detects threats with Surica
 
 ## Prerequisites
 
-Before installing NetGuard, make sure you have these system packages:
+Before installing FlowSentrix, make sure you have these system packages:
 
 ### System Dependencies
 
@@ -60,7 +60,7 @@ sudo apt update
 sudo apt install python3 python3-pip python3-venv tshark suricata nodejs npm
 ```
 
-> **Note:** During tshark installation, select **"Yes"** when asked to allow non-superusers to capture packets, or run NetGuard with `sudo`.
+> **Note:** During tshark installation, select **"Yes"** when asked to allow non-superusers to capture packets, or run FlowSentrix with `sudo`.
 
 ---
 
@@ -69,8 +69,8 @@ sudo apt install python3 python3-pip python3-venv tshark suricata nodejs npm
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/DamodarPatil/NetGuard.git
-cd NetGuard
+git clone https://github.com/DamodarPatil/FlowSentrix.git
+cd FlowSentrix
 ```
 
 ### 2. Set Up Python Virtual Environment
@@ -95,8 +95,8 @@ cd ..
 Create a config file for AI features and AbuseIPDB:
 
 ```bash
-mkdir -p ~/.netguard
-cat > ~/.netguard/config.json << 'EOF'
+mkdir -p ~/.flowsentrix
+cat > ~/.flowsentrix/config.json << 'EOF'
 {
     "groq_api_key": "your-groq-api-key-here",
     "abuseipdb_api_key": "your-abuseipdb-api-key-here"
@@ -107,7 +107,7 @@ EOF
 - **Groq API key** (free): Get from [console.groq.com](https://console.groq.com)
 - **AbuseIPDB API key** (free): Get from [abuseipdb.com](https://www.abuseipdb.com)
 
-> Both are optional — NetGuard works fully without them, you just won't have AI analysis and IP reputation features.
+> Both are optional — FlowSentrix works fully without them, you just won't have AI analysis and IP reputation features.
 
 ---
 
@@ -116,7 +116,7 @@ EOF
 ### CLI Mode
 
 ```bash
-sudo venv/bin/python3 netguard.py
+sudo venv/bin/python3 flowsentrix.py
 ```
 
 > **Important:** Use `sudo venv/bin/python3` (not just `sudo python3`) so that venv packages are available.
@@ -168,8 +168,8 @@ The dashboard will be available at **http://localhost:5173**
 ## Project Structure
 
 ```
-NetGuard/
-├── netguard.py              # CLI entry point
+FlowSentrix/
+├── flowsentrix.py           # CLI entry point
 ├── requirements.txt         # Python dependencies
 ├── cli/                     # CLI shell & display
 │   ├── shell.py             # Interactive command handler
@@ -194,7 +194,7 @@ NetGuard/
 │   ├── src/                 # React frontend source
 │   └── dist/                # Built frontend (auto-served by API)
 ├── data/                    # Runtime data (gitignored)
-│   ├── netguard.db          # SQLite database
+│   ├── flowsentrix.db       # SQLite database
 │   └── *.pcapng             # Capture files
 └── logs/                    # Log files (gitignored)
 ```
@@ -205,7 +205,7 @@ NetGuard/
 
 ### Suricata IDS Tuning
 
-NetGuard includes pre-configured Suricata tuning files in `config/`:
+FlowSentrix includes pre-configured Suricata tuning files in `config/`:
 
 - **`threshold.config`** — Suppress noisy rules, rate-limit frequent alerts
 - **`severity_remap.yaml`** — Override default severity levels
@@ -243,7 +243,7 @@ Edit `config/tuning.yaml` to adjust detection thresholds for:
 ### "Permission denied" during capture
 ```bash
 # Always run with sudo for packet capture:
-sudo venv/bin/python3 netguard.py
+sudo venv/bin/python3 flowsentrix.py
 ```
 
 ### "tshark not found"
@@ -257,7 +257,7 @@ sudo suricata-update    # Download/update community rules
 ```
 
 ### Database locked errors
-NetGuard uses SQLite WAL mode to handle concurrent access. If you see lock errors, ensure only one capture is running at a time.
+FlowSentrix uses SQLite WAL mode to handle concurrent access. If you see lock errors, ensure only one capture is running at a time.
 
 ### Web dashboard shows blank page
 ```bash
@@ -269,4 +269,4 @@ cd web && npx vite build
 
 ## License
 
-College Project — NetGuard Team
+College Project — FlowSentrix Team

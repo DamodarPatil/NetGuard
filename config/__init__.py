@@ -1,5 +1,5 @@
 """
-NetGuard Configuration Loader.
+FlowSentrix Configuration Loader.
 
 Loads tuning YAML configs from the config/ directory and provides
 utilities for IP allowlist matching (CIDR-based).

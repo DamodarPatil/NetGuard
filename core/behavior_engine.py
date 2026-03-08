@@ -1,5 +1,5 @@
 """
-Behavioral Tagging Engine for NetGuard.
+Behavioral Tagging Engine for FlowSentrix.
 
 Provides 4 statistical/volume-based detectors that complement Suricata's
 signature-based detection. These detect patterns Suricata CANNOT:
@@ -81,7 +81,7 @@ class BehaviorEngine:
         """Initialize the engine.
 
         Args:
-            db: NetGuardDatabase instance (for known_destinations lookups)
+            db: FlowSentrixDatabase instance (for known_destinations lookups)
         """
         self._db = db
 

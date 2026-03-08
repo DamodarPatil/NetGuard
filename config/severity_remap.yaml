@@ -1,5 +1,5 @@
 # =============================================================================
-# NetGuard — Alert Severity Classification (3-Tier)
+# FlowSentrix — Alert Severity Classification (3-Tier)
 # =============================================================================
 #
 #   CRITICAL — Active attack, act immediately
@@ -46,11 +46,11 @@ suricata:
 
   # ── CRITICAL: Active threats ──
 
-  NETGUARD_BRUTE_FORCE:
+  FLOWSENTRIX_BRUTE_FORCE:
     severity: HIGH
     reason: "Brute-force login attempts — confirmed attack."
 
-  NETGUARD_SCAN:
+  FLOWSENTRIX_SCAN:
     severity: HIGH
     reason: "Port scanning — active reconnaissance, precursor to exploitation."
 

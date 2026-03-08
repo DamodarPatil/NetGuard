@@ -1,5 +1,5 @@
 # =============================================================================
-# NetGuard — IP Allowlist (CIDR format)
+# FlowSentrix — IP Allowlist (CIDR format)
 # =============================================================================
 # Two trust tiers:
 #   [TRUSTED]       — Fully exempt from all behavioral alerting
