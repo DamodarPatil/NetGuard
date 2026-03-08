@@ -361,7 +361,7 @@ const Alerts = () => {
                     )}
                     <button onClick={() => setGrouped(g => !g)}
                         className={grouped ? 'btn-violet' : 'btn-primary'}
-                        style={{ padding: '0.45rem 0.9rem' }}>
+                        style={{ padding: '0.45rem 0.9rem', fontSize: '0.8rem' }}>
                         {grouped ? <Layers size={13} /> : <List size={13} />}
                         {grouped ? 'Grouped' : 'Flat'}
                     </button>

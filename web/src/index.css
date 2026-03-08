@@ -57,12 +57,13 @@ body {
 
 .sidebar-toggle-row {
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
   margin-bottom: -0.75rem;
+  width: 50px;
 }
 
 .sidebar-collapsed .sidebar-toggle-row {
-  justify-content: center;
+  width: 100%;
 }
 
 .sidebar-toggle-btn {
@@ -779,6 +780,147 @@ body {
   color: #e6edf3;
   min-width: 32px;
   text-align: right;
+}
+
+/* ── Protocol Panel Clickable ── */
+.proto-panel-clickable {
+  cursor: pointer;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.proto-panel-clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(59, 130, 246, 0.12);
+}
+
+/* ── Protocol 3D Modal ── */
+.proto-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: protoOverlayIn 0.35s ease both;
+}
+
+@keyframes protoOverlayIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.proto-modal-content {
+  width: 720px;
+  max-width: 92vw;
+  max-height: 85vh;
+  background: #0d1117;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(59, 130, 246, 0.08),
+    0 25px 80px rgba(0, 0, 0, 0.6),
+    0 0 60px rgba(59, 130, 246, 0.08);
+  animation: protoModalIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: center center;
+}
+
+@keyframes protoModalIn {
+  from {
+    opacity: 0;
+    transform: perspective(900px) rotateX(12deg) scale(0.8) translateY(40px);
+  }
+
+  to {
+    opacity: 1;
+    transform: perspective(900px) rotateX(0deg) scale(1) translateY(0);
+  }
+}
+
+.proto-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.proto-modal-close {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #7d8590;
+  padding: 0.4rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.proto-modal-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e6edf3;
+}
+
+.proto-modal-body {
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2rem;
+  overflow-y: auto;
+  max-height: calc(85vh - 70px);
+}
+
+.proto-modal-chart {
+  display: flex;
+  justify-content: center;
+}
+
+.proto-modal-chart .pie-chart-wrap {
+  width: 340px;
+  height: 340px;
+}
+
+.proto-modal-details {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.proto-modal-row {
+  display: grid;
+  grid-template-columns: 130px 1fr 100px;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  transition: background 0.15s;
+}
+
+.proto-modal-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+@media (max-width: 600px) {
+  .proto-modal-chart .pie-chart-wrap {
+    width: 260px;
+    height: 260px;
+  }
+
+  .proto-modal-row {
+    grid-template-columns: 100px 1fr 80px;
+    gap: 0.5rem;
+  }
 }
 
 /* ── Animations ── */

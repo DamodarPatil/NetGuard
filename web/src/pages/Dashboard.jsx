@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { Activity, Wifi, HardDrive, Cpu, ArrowUpRight, AlertTriangle } from 'lucide-react'
+import { Activity, Wifi, HardDrive, Cpu, ArrowUpRight, AlertTriangle, X } from 'lucide-react'
 import { Sparkline, PieChart } from '../components/Charts'
 import { useSession } from '../context/SessionContext'
 import { useApiCache } from '../hooks/useApiCache'
@@ -9,6 +10,7 @@ const API = 'http://localhost:8000'
 
 const Dashboard = () => {
     const [apiOnline, setApiOnline] = useState(true)
+    const [protoModal, setProtoModal] = useState(false)
     const { sessionId } = useSession()
     const navigate = useNavigate()
 
@@ -131,7 +133,7 @@ const Dashboard = () => {
 
             {/* Protocol Distribution */}
             {protocols.length > 0 && (
-                <div className="panel">
+                <div className="panel proto-panel-clickable" onClick={() => setProtoModal(true)}>
                     <div className="panel-header">
                         <span className="panel-title">
                             <Activity size={16} style={{ color: '#3b82f6' }} />
@@ -169,6 +171,53 @@ const Dashboard = () => {
                     </div>
                 </div>
             )}
+
+            {/* Protocol Distribution 3D Modal */}
+            {protoModal && createPortal(
+                <div className="proto-modal-overlay" onClick={() => setProtoModal(false)}>
+                    <div className="proto-modal-content" onClick={e => e.stopPropagation()}>
+                        <div className="proto-modal-header">
+                            <span className="panel-title">
+                                <Activity size={18} style={{ color: '#3b82f6' }} />
+                                Protocol Distribution
+                            </span>
+                            <button className="proto-modal-close" onClick={() => setProtoModal(false)}>
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <div className="proto-modal-body">
+                            <div className="proto-modal-chart">
+                                <PieChart
+                                    protocols={protocols}
+                                    centerLabel={pktVal}
+                                    centerSub={`${pktUnit} PKTS`}
+                                />
+                            </div>
+                            <div className="proto-modal-details">
+                                {protocols.map((p, i) => (
+                                    <div className="proto-modal-row" key={i}>
+                                        <div className="legend-info">
+                                            <div className="legend-dot" style={{ background: p.color }} />
+                                            <span className="legend-name">{p.name}</span>
+                                        </div>
+                                        <div className="legend-bar-track" style={{ flex: 1 }}>
+                                            <div className="legend-bar-fill" style={{
+                                                width: `${Math.max(p.pct, 2)}%`,
+                                                background: `linear-gradient(90deg, ${p.color}40, ${p.color})`,
+                                                boxShadow: `0 0 6px ${p.color}30`,
+                                            }} />
+                                        </div>
+                                        <div className="legend-stats">
+                                            <span className="legend-pkt">{fmtPkt(p.packets)}</span>
+                                            <span className="legend-pct">{p.pct}%</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            , document.body)}
 
             {/* Recent Alerts */}
             <div className="panel">
