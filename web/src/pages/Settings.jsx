@@ -4,7 +4,8 @@ import {
     Settings as SettingsIcon, CheckCircle, XCircle, Shield, HardDrive,
     Database, Trash2, RefreshCw, Monitor, Cpu, AlertTriangle,
     FileText, Clock, Activity, ChevronDown, ChevronRight, Info,
-    Play, Square, Download, MoreHorizontal, X
+    Play, Square, Download, MoreHorizontal, X,
+    ChevronLeft, ChevronsLeft, ChevronsRight
 } from 'lucide-react'
 import { useSession } from '../context/SessionContext'
 import { useApiCache } from '../hooks/useApiCache'
@@ -69,6 +70,8 @@ const Settings = () => {
     const [expandedSession, setExpandedSession] = useState(null)
     const [menuOpen, setMenuOpen] = useState(null)
     const [confirmModal, setConfirmModal] = useState(null) // { type, sessionId, message }
+    const [sessPage, setSessPage] = useState(1)
+    const sessPerPage = 15
     const { sessionId, loadSession, unloadSession } = useSession()
 
     const { data: system, refresh: refreshSystem } = useApiCache(
@@ -164,6 +167,11 @@ const Settings = () => {
     }
 
     const sessions = data?.sessions || []
+    const sessTotalPages = Math.max(1, Math.ceil(sessions.length / sessPerPage))
+    const sessStart = (sessPage - 1) * sessPerPage
+    const paginatedSessions = sessions.slice(sessStart, sessStart + sessPerPage)
+    const sessRangeStart = sessions.length === 0 ? 0 : sessStart + 1
+    const sessRangeEnd = Math.min(sessStart + sessPerPage, sessions.length)
 
     return (
         <>
@@ -281,7 +289,7 @@ const Settings = () => {
                             No capture sessions recorded
                         </div>
                     ) : (
-                        sessions.map((s, i) => (
+                        paginatedSessions.map((s, i) => (
                             <div key={s.id}>
                                 <div
                                     style={{
@@ -450,6 +458,50 @@ const Settings = () => {
                         ))
                     )}
                 </div>
+
+                {/* ── Session Pagination Bar ── */}
+                {sessions.length > sessPerPage && (
+                    <div className="pagination-bar" style={{ borderTop: '1px solid rgba(255,255,255,0.04)', padding: '0.65rem 1.25rem' }}>
+                        <span>
+                            Showing <span className="text-white">{sessRangeStart.toLocaleString()}–{sessRangeEnd.toLocaleString()}</span> of{' '}
+                            <span className="text-white">{sessions.length.toLocaleString()}</span> sessions
+                        </span>
+
+                        <div className="pagination-controls">
+                            <button onClick={() => setSessPage(1)} disabled={sessPage === 1} className="page-btn">
+                                <ChevronsLeft size={14} />
+                            </button>
+                            <button onClick={() => setSessPage(p => Math.max(1, p - 1))} disabled={sessPage === 1} className="page-btn">
+                                <ChevronLeft size={14} />
+                            </button>
+
+                            {(() => {
+                                const pages = []
+                                let start = Math.max(1, sessPage - 2)
+                                let end = Math.min(sessTotalPages, start + 4)
+                                if (end - start < 4) start = Math.max(1, end - 4)
+                                for (let i = start; i <= end; i++) pages.push(i)
+                                return pages.map(p => (
+                                    <button key={p} onClick={() => setSessPage(p)}
+                                        className={`page-btn${p === sessPage ? ' active' : ''}`}>
+                                        {p}
+                                    </button>
+                                ))
+                            })()}
+
+                            <button onClick={() => setSessPage(p => Math.min(sessTotalPages, p + 1))} disabled={sessPage === sessTotalPages} className="page-btn">
+                                <ChevronRight size={14} />
+                            </button>
+                            <button onClick={() => setSessPage(sessTotalPages)} disabled={sessPage === sessTotalPages} className="page-btn">
+                                <ChevronsRight size={14} />
+                            </button>
+
+                            <span className="pagination-info">
+                                Page {sessPage} of {sessTotalPages.toLocaleString()}
+                            </span>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* ── About Panel ── */}

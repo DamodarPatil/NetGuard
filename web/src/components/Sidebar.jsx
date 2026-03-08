@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Network, Shield, Settings, Radio, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { LayoutDashboard, Network, ShieldAlert, Settings, Radio, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import flowsentrixLogo from '../assets/flowsentrix-logo.svg'
 
 const Sidebar = ({ collapsed, onToggle }) => {
@@ -47,7 +47,7 @@ const Sidebar = ({ collapsed, onToggle }) => {
                 </NavLink>
                 <NavLink to="/alerts" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                     title="Alerts">
-                    <Shield size={18} />
+                    <ShieldAlert size={18} />
                     {!collapsed && 'Alerts'}
                 </NavLink>
                 <NavLink to="/settings" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Activity, RefreshCw, Tag, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowUp, ArrowDown, ArrowUpDown, Unplug } from 'lucide-react'
+import { Activity, RefreshCw, Tag, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowUp, ArrowDown, ArrowUpDown, Unplug, Sparkles, X, Timer, ShieldAlert, Zap, MapPin } from 'lucide-react'
 import { useSession } from '../context/SessionContext'
 import { SkeletonTable, EmptyState } from '../components/Skeleton'
 import FilterBar from '../components/FilterBar'
@@ -22,10 +22,10 @@ const protoColor = (p) => PROTO_COLORS[p] || '#7d8590'
 
 // Tag → color/label config
 const TAG_CONFIG = {
-    beaconing: { color: '#ef4444', icon: '⏱', label: 'Beaconing' },
-    data_exfil: { color: '#ea580c', icon: '⚠', label: 'Data Exfil' },
-    traffic_anomaly: { color: '#f59e0b', icon: '⚡', label: 'Anomaly' },
-    new_dest: { color: '#3b82f6', icon: '🆕', label: 'New Dest' },
+    beaconing: { color: '#ef4444', Icon: Timer, label: 'Beaconing' },
+    data_exfil: { color: '#ea580c', Icon: ShieldAlert, label: 'Data Exfil' },
+    traffic_anomaly: { color: '#f59e0b', Icon: Zap, label: 'Anomaly' },
+    new_dest: { color: '#3b82f6', Icon: MapPin, label: 'New Dest' },
 }
 
 const DirectionBadge = ({ dir }) => {
@@ -49,9 +49,10 @@ const ProtoBadge = ({ proto }) => {
 const TagBadge = ({ tag }) => {
     const cfg = TAG_CONFIG[tag]
     if (!cfg) return <span className="text-muted text-xs">—</span>
+    const { Icon } = cfg
     return (
         <span className="badge" style={{ color: cfg.color, background: `${cfg.color}12`, border: `1px solid ${cfg.color}30` }}>
-            <span style={{ fontSize: '0.7rem' }}>{cfg.icon}</span>
+            <Icon size={12} />
             {cfg.label}
         </span>
     )
@@ -156,7 +157,17 @@ const Connections = () => {
         fetchConnections()
     }, [fetchConnections])
 
-    const toggleExpand = (id) => setExpanded(prev => prev === id ? null : id)
+    const toggleExpand = (id) => {
+        setExpanded(prev => {
+            if (prev === id) {
+                // Collapsing — clear AI state for this connection
+                setAiAnalysis(p => { const n = { ...p }; delete n[id]; return n })
+                setAiLoading(p => { const n = { ...p }; delete n[id]; return n })
+                return null
+            }
+            return id
+        })
+    }
 
     const handleSort = (field) => {
         if (sortCol === field) {
@@ -230,6 +241,7 @@ const Connections = () => {
                 protocol: c.protocol, direction: c.direction,
                 packets: c.packets, bytes_str: c.bytes,
                 tags: c.tags, time: c.time,
+                no_cache: true,
             }),
         })
             .then(r => r.json())
@@ -373,7 +385,7 @@ const Connections = () => {
                                                     <div className="detail-divider">
                                                         {!aiAnalysis[c.id] && !aiLoading[c.id] && (
                                                             <button onClick={(e) => handleAnalyze(c, e)} className="ai-btn">
-                                                                🤖 Analyze Connection
+                                                                <Sparkles size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} /> Analyze Connection
                                                             </button>
                                                         )}
 
@@ -387,7 +399,8 @@ const Connections = () => {
                                                         {aiAnalysis[c.id] && !aiLoading[c.id] && (
                                                             <div className="ai-panel">
                                                                 <div className="ai-panel-header">
-                                                                    🤖 AI Connection Analysis
+                                                                    <Sparkles size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} /> AI Connection Analysis
+                                                                    <button onClick={(e) => { e.stopPropagation(); setAiAnalysis(prev => { const next = { ...prev }; delete next[c.id]; return next }) }} className="btn-ghost" style={{ marginLeft: 'auto', padding: '2px 6px', fontSize: '0.7rem', color: '#7d8590' }}><X size={14} /></button>
                                                                 </div>
                                                                 <div className="ai-panel-body">
                                                                     {aiAnalysis[c.id].split('**').map((part, idx) =>

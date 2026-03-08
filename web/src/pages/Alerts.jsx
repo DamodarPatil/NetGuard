@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import {
     Shield, Zap, AlertTriangle, Search, RefreshCw, Filter,
     ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
-    Layers, List, Radio, ExternalLink, ShieldOff
+    Layers, List, Radio, ExternalLink, ShieldOff, Sparkles, Globe, X
 } from 'lucide-react'
 import { useSession } from '../context/SessionContext'
 import { SkeletonTable, EmptyState } from '../components/Skeleton'
@@ -257,7 +257,29 @@ const Alerts = () => {
         }
     }, [alerts, searchParams, setSearchParams])
 
-    const toggleExpand = (id) => setExpanded(prev => prev === id ? null : id)
+    const toggleExpand = (id) => {
+        setExpanded(prev => {
+            if (prev === id) {
+                // Collapsing — clear AI and IP state for this alert
+                setAiExplanations(p => { const n = { ...p }; delete n[id]; return n })
+                setAiLoading(p => { const n = { ...p }; delete n[id]; return n })
+                setIpCheck(p => {
+                    const n = { ...p }
+                    delete n[`${id}_src`]
+                    delete n[`${id}_dst`]
+                    return n
+                })
+                setIpLoading(p => {
+                    const n = { ...p }
+                    delete n[`${id}_src`]
+                    delete n[`${id}_dst`]
+                    return n
+                })
+                return null
+            }
+            return id
+        })
+    }
     const toggleSeverityFilter = (sev) => setSeverity(prev => prev === sev ? '' : sev)
 
 
@@ -297,6 +319,7 @@ const Alerts = () => {
                 severity: a.severity, src_ip: a.src_ip, dst_ip: a.dst_ip,
                 src_port: a.src_port || 0, dst_port: a.dst_port || 0,
                 proto: a.proto, action: a.action, timestamp: a.timestamp,
+                no_cache: true,
             }),
         })
             .then(r => r.json())
@@ -556,7 +579,7 @@ const Alerts = () => {
                                             {/* ── AbuseIPDB IP Reputation ── */}
                                             <div className="detail-divider">
                                                 <div className="detail-item-label" style={{ fontWeight: 600, marginBottom: '0.5rem' }}>
-                                                    🛡️ IP Reputation Check (AbuseIPDB)
+                                                    <Globe size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} /> IP Reputation Check (AbuseIPDB)
                                                 </div>
                                                 <div className="flex-row gap-md flex-wrap">
                                                     {[['src', a.src_ip, 'Source'], ['dst', a.dst_ip, 'Destination']].map(([role, ip, label]) => {
@@ -607,6 +630,7 @@ const Alerts = () => {
                                                                     <span className="text-muted" style={{ fontWeight: 600 }}>{label}:</span>{' '}
                                                                     <span style={{ color: '#ff6b6b' }}>{data.error}</span>
                                                                     <button onClick={doCheck} className="btn-ghost" style={{ marginLeft: '8px' }}>↻ Retry</button>
+                                                                    <button onClick={(e) => { e.stopPropagation(); setIpCheck(prev => { const next = { ...prev }; delete next[key]; return next }) }} className="btn-ghost" style={{ marginLeft: '8px', color: '#484f58' }}><X size={12} style={{ verticalAlign: 'middle' }} /> Close</button>
                                                                 </div>
                                                             )
                                                         }
@@ -619,7 +643,8 @@ const Alerts = () => {
                                                                     fontSize: '0.75rem', minWidth: '220px',
                                                                 }}>
                                                                     <div style={{ fontWeight: 600, color: '#7d8590', marginBottom: '4px' }}>{label}: <span className="mono">{ip}</span></div>
-                                                                    <div className="text-muted">🏠 Private/local address — not internet-routable</div>
+                                                                    <div className="text-muted">Private/local address — not internet-routable</div>
+                                                                    <button onClick={(e) => { e.stopPropagation(); setIpCheck(prev => { const next = { ...prev }; delete next[key]; return next }) }} className="btn-ghost" style={{ marginTop: '4px', padding: 0, fontSize: '0.65rem', color: '#484f58' }}><X size={12} style={{ verticalAlign: 'middle' }} /> Close</button>
                                                                 </div>
                                                             )
                                                         }
@@ -668,6 +693,7 @@ const Alerts = () => {
                                                                 </div>
 
                                                                 <button onClick={doCheck} className="btn-ghost" style={{ marginTop: '6px', padding: 0, fontSize: '0.65rem', color: '#484f58' }}>↻ Re-check</button>
+                                                                <button onClick={(e) => { e.stopPropagation(); setIpCheck(prev => { const next = { ...prev }; delete next[key]; return next }) }} className="btn-ghost" style={{ marginTop: '6px', marginLeft: '12px', padding: 0, fontSize: '0.65rem', color: '#484f58' }}><X size={12} style={{ verticalAlign: 'middle' }} /> Close</button>
                                                             </div>
                                                         )
                                                     })}
@@ -678,7 +704,7 @@ const Alerts = () => {
                                             <div className="detail-divider">
                                                 {!aiExplanations[a.id] && !aiLoading[a.id] && (
                                                     <button onClick={(e) => handleAiExplain(a, e)} className="ai-btn">
-                                                        🤖 Explain with AI
+                                                        <Sparkles size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} /> Explain with AI
                                                     </button>
                                                 )}
 
@@ -691,7 +717,7 @@ const Alerts = () => {
 
                                                 {aiExplanations[a.id] && !aiLoading[a.id] && (
                                                     <div className="ai-panel">
-                                                        <div className="ai-panel-header">🤖 AI Analysis</div>
+                                                        <div className="ai-panel-header"><Sparkles size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} /> AI Analysis<button onClick={(e) => { e.stopPropagation(); setAiExplanations(prev => { const next = { ...prev }; delete next[a.id]; return next }) }} className="btn-ghost" style={{ marginLeft: 'auto', padding: '2px 6px', fontSize: '0.7rem', color: '#7d8590' }}><X size={14} /></button></div>
                                                         <div className="ai-panel-body">
                                                             {aiExplanations[a.id].split('**').map((part, idx) =>
                                                                 idx % 2 === 1

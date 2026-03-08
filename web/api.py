@@ -1287,6 +1287,7 @@ class ExplainRequest(BaseModel):
     proto: str = ""
     action: str = ""
     timestamp: str = ""
+    no_cache: bool = False
 
 
 @app.post("/api/alerts/explain")
@@ -1302,22 +1303,33 @@ def explain_alert(req: ExplainRequest):
     cache_key = f"{req.signature}|{req.src_ip}|{req.dst_ip}|{req.src_port}|{req.dst_port}"
 
     # Check cache first
-    try:
-        conn = get_read_conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT explanation FROM alert_explanations WHERE cache_key = ?",
-            (cache_key,)
-        )
-        row = cursor.fetchone()
-        conn.close()
-        if row:
-            return {"ok": True, "explanation": row[0], "cached": True}
-    except Exception:
-        pass
+    if not req.no_cache:
+        try:
+            conn = get_read_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT explanation FROM alert_explanations WHERE cache_key = ?",
+                (cache_key,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                return {"ok": True, "explanation": row[0], "cached": True}
+        except Exception:
+            pass
+    else:
+        # Delete old cache so fresh result replaces it
+        try:
+            import sqlite3
+            wconn = sqlite3.connect(DB_PATH, timeout=5)
+            wconn.execute("DELETE FROM alert_explanations WHERE cache_key = ?", (cache_key,))
+            wconn.commit()
+            wconn.close()
+        except Exception:
+            pass
 
     # Call Groq AI
-    explanation = _call_ai(req.dict())
+    explanation = _call_ai(req.model_dump())
 
     if not explanation:
         # Fallback to static description
@@ -1340,13 +1352,22 @@ def explain_alert(req: ExplainRequest):
 
 
 # ── AbuseIPDB IP Reputation Check ────────────────────────────────
+_ip_cache = {}  # In-memory cache: ip -> {result, timestamp}
+_IP_CACHE_TTL = 300  # 5 minutes
+
 @app.get("/api/ip/check/{ip:path}")
 def check_ip_reputation(ip: str):
     """Check an IP against AbuseIPDB. Returns detailed abuse info."""
     import urllib.request
     import json
+    import time as _time
 
     ip = ip.strip()
+
+    # Check in-memory cache
+    cached = _ip_cache.get(ip)
+    if cached and (_time.time() - cached['ts'] < _IP_CACHE_TTL):
+        return cached['result']
 
     # Get API key from config
     config_paths = []
@@ -1373,8 +1394,10 @@ def check_ip_reputation(ip: str):
     if (ip.startswith('10.') or ip.startswith('192.168.') or ip.startswith('172.16.') or
         ip.startswith('127.') or ip.startswith('169.254.') or ip == '0.0.0.0' or
         ip.startswith('::') or ip.startswith('fe80:') or ip.startswith('fc') or ip.startswith('fd')):
-        return {"ok": True, "ip": ip, "abuse_score": 0, "is_private": True,
+        result = {"ok": True, "ip": ip, "abuse_score": 0, "is_private": True,
                 "verdict": "PRIVATE", "detail": "This is a local/private IP address — not routable on the internet."}
+        _ip_cache[ip] = {'result': result, 'ts': __import__('time').time()}
+        return result
 
     try:
         url = f"https://api.abuseipdb.com/api/v2/check?ipAddress={ip}&maxAgeInDays=90&verbose"
@@ -1389,7 +1412,7 @@ def check_ip_reputation(ip: str):
         r = data.get('data', {})
         score = r.get('abuseConfidenceScore', 0)
 
-        return {
+        result = {
             "ok": True,
             "ip": ip,
             "abuse_score": score,
@@ -1404,6 +1427,8 @@ def check_ip_reputation(ip: str):
             "is_malicious": score > 50,
             "verdict": "MALICIOUS" if score > 50 else ("SUSPICIOUS" if score > 20 else "CLEAN"),
         }
+        _ip_cache[ip] = {'result': result, 'ts': __import__('time').time()}
+        return result
     except Exception as e:
         return {"ok": False, "error": f"API error: {str(e)[:100]}"}
 
@@ -1499,6 +1524,7 @@ class AnalyzeConnectionRequest(BaseModel):
     bytes_str: str = ""
     tags: str = ""
     time: str = ""
+    no_cache: bool = False
 
 
 @app.post("/api/connections/analyze")
@@ -1510,19 +1536,29 @@ def analyze_connection(req: AnalyzeConnectionRequest):
     cache_key = f"conn|{req.src_ip}|{req.dst_ip}|{req.protocol}|{req.conn_id}"
 
     # Check cache
-    try:
-        conn = get_read_conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT explanation FROM alert_explanations WHERE cache_key = ?",
-            (cache_key,)
-        )
-        row = cursor.fetchone()
-        conn.close()
-        if row:
-            return {"ok": True, "explanation": row[0], "cached": True}
-    except Exception:
-        pass
+    if not req.no_cache:
+        try:
+            conn = get_read_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT explanation FROM alert_explanations WHERE cache_key = ?",
+                (cache_key,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                return {"ok": True, "explanation": row[0], "cached": True}
+        except Exception:
+            pass
+    else:
+        # Delete old cache so fresh result replaces it
+        try:
+            wconn = sqlite3.connect(DB_PATH, timeout=5)
+            wconn.execute("DELETE FROM alert_explanations WHERE cache_key = ?", (cache_key,))
+            wconn.commit()
+            wconn.close()
+        except Exception:
+            pass
 
     api_key = _get_ai_key()
     if not api_key:
