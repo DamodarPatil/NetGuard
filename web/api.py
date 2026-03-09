@@ -477,7 +477,8 @@ def get_connections(
 
     cursor.execute(f"""
         SELECT id, src_ip, src_port, dst_ip, dst_port, protocol,
-               direction, total_packets, total_bytes, state, tags, start_time
+               direction, total_packets, total_bytes, state, tags, start_time,
+               transport, duration, end_time, severity, session_id
         FROM connections
         {where_sql}
         ORDER BY id DESC
@@ -501,8 +502,11 @@ def get_connections(
 
     connections = []
     for (id_, src_ip, src_port, dst_ip, dst_port, proto,
-         direction, packets, nbytes, state, tags, start_time) in rows:
+         direction, packets, nbytes, state, tags, start_time,
+         transport, duration, end_time, severity, sess_id) in rows:
         bv, bu = fmt_bytes(nbytes or 0)
+        raw_bytes = nbytes or 0
+        dur = duration or 0
         connections.append({
             "id": id_,
             "src": f"{src_ip}:{src_port}" if src_port else src_ip,
@@ -512,11 +516,18 @@ def get_connections(
             "src_port": src_port or 0,
             "dst_port": dst_port or 0,
             "protocol": proto,
+            "transport": transport or "",
             "direction": direction or "—",
             "packets": packets or 0,
             "bytes": f"{bv} {bu}",
+            "raw_bytes": raw_bytes,
             "tags": tags or "",
             "time": start_time or "",
+            "end_time": end_time or "",
+            "duration": round(dur, 2),
+            "state": state or "",
+            "severity": severity or "",
+            "session_id": sess_id or 0,
         })
 
     return {
@@ -527,6 +538,154 @@ def get_connections(
         "total_pages": total_pages,
         "protocols": all_protos,
         "tags": all_tags,
+    }
+
+
+@app.get("/api/connections/{conn_id}/details")
+def get_connection_details(conn_id: int):
+    """Get enriched details for a single connection — related alerts, IP reputation, history."""
+    conn = get_read_conn()
+    cursor = conn.cursor()
+
+    # 1. Fetch the connection itself
+    cursor.execute("""
+        SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, transport,
+               direction, total_packets, total_bytes, state, tags, severity,
+               start_time, end_time, duration, session_id
+        FROM connections WHERE id = ?
+    """, (conn_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": "Connection not found"}
+
+    (id_, src_ip, src_port, dst_ip, dst_port, proto, transport,
+     direction, packets, nbytes, state, tags, severity,
+     start_time, end_time, duration, sess_id) = row
+
+    nbytes = nbytes or 0
+    packets = packets or 0
+    duration = duration or 0
+    bv, bu = fmt_bytes(nbytes)
+
+    # 2. Related alerts: matching src_ip/dst_ip pair (either direction)
+    related_alerts = []
+    cursor.execute("""
+        SELECT id, timestamp, severity, signature, category, src_ip, dst_ip,
+               src_port, dst_port, proto, action
+        FROM alerts
+        WHERE (src_ip = ? AND dst_ip = ?) OR (src_ip = ? AND dst_ip = ?)
+        ORDER BY timestamp DESC
+        LIMIT 20
+    """, (src_ip, dst_ip, dst_ip, src_ip))
+    for arow in cursor.fetchall():
+        related_alerts.append({
+            "id": arow[0],
+            "timestamp": arow[1],
+            "severity": arow[2],
+            "signature": arow[3],
+            "category": arow[4] or "",
+            "src_ip": arow[5],
+            "dst_ip": arow[6],
+            "src_port": arow[7],
+            "dst_port": arow[8],
+            "proto": arow[9] or "",
+            "action": arow[10] or "allowed",
+        })
+
+    # 3. IP reputation for both src and dst
+    reputation = {}
+    for ip in set([src_ip, dst_ip]):
+        cursor.execute("""
+            SELECT abuse_score, country, isp, is_malicious, last_checked
+            FROM ip_reputation WHERE ip = ?
+        """, (ip,))
+        rrow = cursor.fetchone()
+        if rrow:
+            reputation[ip] = {
+                "abuse_score": rrow[0],
+                "country": rrow[1] or "",
+                "isp": rrow[2] or "",
+                "is_malicious": bool(rrow[3]),
+                "last_checked": rrow[4] or "",
+            }
+
+    # 4. Destination history (from known_destinations)
+    dest_history = None
+    cursor.execute("""
+        SELECT first_seen, session_count, total_bytes_avg
+        FROM known_destinations WHERE ip = ?
+    """, (dst_ip,))
+    drow = cursor.fetchone()
+    if drow:
+        avg_bv, avg_bu = fmt_bytes(int(drow[2] or 0))
+        dest_history = {
+            "first_seen": drow[0] or "",
+            "session_count": drow[1] or 0,
+            "avg_bytes": f"{avg_bv} {avg_bu}",
+        }
+
+    # 5. Other connections to same destination (recent, up to 10)
+    related_connections = []
+    cursor.execute("""
+        SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, direction,
+               total_packets, total_bytes, start_time, tags
+        FROM connections
+        WHERE dst_ip = ? AND id != ?
+        ORDER BY start_time DESC
+        LIMIT 10
+    """, (dst_ip, conn_id))
+    for rcrow in cursor.fetchall():
+        rbv, rbu = fmt_bytes(rcrow[8] or 0)
+        related_connections.append({
+            "id": rcrow[0],
+            "src_ip": rcrow[1],
+            "src_port": rcrow[2] or 0,
+            "dst_ip": rcrow[3],
+            "dst_port": rcrow[4] or 0,
+            "protocol": rcrow[5],
+            "direction": rcrow[6] or "",
+            "packets": rcrow[7] or 0,
+            "bytes": f"{rbv} {rbu}",
+            "time": rcrow[9] or "",
+            "tags": rcrow[10] or "",
+        })
+
+    conn.close()
+
+    # Computed metrics
+    data_rate = round(nbytes / duration, 1) if duration > 0 else 0
+    pps = round(packets / duration, 1) if duration > 0 else 0
+    dr_val, dr_unit = fmt_bytes(int(data_rate))
+
+    return {
+        "ok": True,
+        "connection": {
+            "id": id_,
+            "src_ip": src_ip,
+            "dst_ip": dst_ip,
+            "src_port": src_port or 0,
+            "dst_port": dst_port or 0,
+            "protocol": proto,
+            "transport": transport or "",
+            "direction": direction or "",
+            "packets": packets,
+            "bytes": f"{bv} {bu}",
+            "raw_bytes": nbytes,
+            "tags": tags or "",
+            "severity": severity or "",
+            "state": state or "",
+            "start_time": start_time or "",
+            "end_time": end_time or "",
+            "duration": round(duration, 2),
+            "session_id": sess_id or 0,
+            "data_rate": f"{dr_val} {dr_unit}/s",
+            "packets_per_sec": pps,
+        },
+        "related_alerts": related_alerts,
+        "reputation": reputation,
+        "dest_history": dest_history,
+        "related_connections": related_connections,
     }
 
 

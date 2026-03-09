@@ -165,7 +165,7 @@ const Alerts = () => {
     const [totalPages, setTotalPages] = useState(cached?.totalPages || 1)
 
     // Filters
-    const [search, setSearch] = useState('')
+    const [search, setSearch] = useState(searchParams.get('search') || '')
     const [severity, setSeverity] = useState('')
     const [proto, setProto] = useState('')
     const [dateFrom, setDateFrom] = useState('')
@@ -248,12 +248,16 @@ const Alerts = () => {
     // Auto-expand alert when navigated from Dashboard with ?alert_id=
     useEffect(() => {
         const alertId = searchParams.get('alert_id')
+        const searchQ = searchParams.get('search')
+        if (searchQ && search !== searchQ) setSearch(searchQ)
         if (alertId && alerts.length > 0) {
             const id = parseInt(alertId, 10)
             if (alerts.some(a => a.id === id)) {
                 setExpanded(id)
                 setSearchParams({}, { replace: true })
             }
+        } else if (!alertId && searchQ) {
+            setSearchParams({}, { replace: true })
         }
     }, [alerts, searchParams, setSearchParams])
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Activity, RefreshCw, Tag, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowUp, ArrowDown, ArrowUpDown, Unplug, Sparkles, X, Timer, ShieldAlert, Zap, MapPin } from 'lucide-react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Activity, RefreshCw, Tag, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowUp, ArrowDown, ArrowUpDown, Unplug, Sparkles, X, Timer, ShieldAlert, Zap, MapPin, Clock, ArrowRightLeft, Network, AlertTriangle, Globe, History, Layers, ExternalLink } from 'lucide-react'
 import { useSession } from '../context/SessionContext'
 import { SkeletonTable, EmptyState } from '../components/Skeleton'
 import FilterBar from '../components/FilterBar'
@@ -81,8 +82,274 @@ const SortHeader = ({ label, field, sortCol, sortDir, onSort }) => {
     )
 }
 
+// ── State badge for TCP connection state ──
+const StateBadge = ({ state }) => {
+    if (!state) return <span className="text-muted">—</span>
+    const colors = {
+        ACTIVE: '#22c55e', ESTABLISHED: '#22c55e', SYN_SENT: '#f59e0b',
+        FIN: '#7d8590', RST: '#ef4444',
+    }
+    const color = colors[state] || '#7d8590'
+    return (
+        <span className="badge" style={{ color, background: `${color}15`, border: `1px solid ${color}30`, fontSize: '0.7rem' }}>
+            {state}
+        </span>
+    )
+}
+
+// ── Severity badge ──
+const SeverityBadge = ({ severity }) => {
+    if (!severity) return null
+    const colors = { critical: '#ef4444', high: '#ef4444', medium: '#f59e0b', low: '#3b82f6' }
+    const color = colors[severity.toLowerCase()] || '#7d8590'
+    return (
+        <span className="badge" style={{ color, background: `${color}15`, border: `1px solid ${color}30`, fontSize: '0.7rem', textTransform: 'uppercase' }}>
+            {severity}
+        </span>
+    )
+}
+
+// ── Format duration to human-readable ──
+const fmtDuration = (secs) => {
+    if (!secs || secs <= 0) return '< 1s'
+    if (secs < 60) return `${secs.toFixed(1)}s`
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ${Math.floor(secs % 60)}s`
+    const h = Math.floor(secs / 3600)
+    const m = Math.floor((secs % 3600) / 60)
+    return `${h}h ${m}m`
+}
+
+// ── Detail section header ──
+const SectionHeader = ({ icon: Icon, title, count }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', marginTop: '1.25rem' }}>
+        <Icon size={14} style={{ color: '#3b82f6' }} />
+        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#c9d1d9', letterSpacing: '0.02em' }}>{title}</span>
+        {count !== undefined && (
+            <span style={{ fontSize: '0.7rem', color: '#7d8590', background: '#21262d', borderRadius: '10px', padding: '1px 8px' }}>{count}</span>
+        )}
+    </div>
+)
+
+// ── Enriched connection detail panel ──
+const ConnectionDetailPanel = ({ c, details, fmtTime, aiAnalysis, aiLoading, onAnalyze, onReanalyze, setAiAnalysis, navigate }) => {
+    const d = details?.connection || c
+    const relatedAlerts = details?.related_alerts || []
+    const reputation = details?.reputation || {}
+    const destHistory = details?.dest_history
+    const relatedConns = details?.related_connections || []
+
+    return (
+        <div style={{ padding: '0.25rem 0' }}>
+            {/* ── Connection Info + Flow Metrics (merged, only essential) ── */}
+            <SectionHeader icon={Network} title="Connection Details" />
+            <div className="detail-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
+                <div className="detail-item">
+                    <div className="detail-item-label">Source</div>
+                    <div className="detail-item-value" style={{ fontFamily: 'monospace' }}>{d.src_ip}{d.src_port ? `:${d.src_port}` : ''}</div>
+                </div>
+                <div className="detail-item">
+                    <div className="detail-item-label">Destination</div>
+                    <div className="detail-item-value" style={{ fontFamily: 'monospace' }}>{d.dst_ip}{d.dst_port ? `:${d.dst_port}` : ''}</div>
+                </div>
+                {[
+                    ['Protocol', d.protocol],
+                    ['Direction', d.direction],
+                    ['Packets', (d.packets || 0).toLocaleString()],
+                    ['Data', d.bytes || c.bytes],
+                    ['Duration', fmtDuration(d.duration)],
+                    ['Data Rate', d.data_rate || '—'],
+                    ['Started', fmtTime(d.start_time || d.time || c.time)],
+                ].map(([label, val]) => (
+                    <div key={label} className="detail-item">
+                        <div className="detail-item-label">{label}</div>
+                        <div className="detail-item-value">{val}</div>
+                    </div>
+                ))}
+                {d.severity && (
+                    <div className="detail-item">
+                        <div className="detail-item-label">Severity</div>
+                        <div className="detail-item-value"><SeverityBadge severity={d.severity} /></div>
+                    </div>
+                )}
+                {d.tags && (
+                    <div className="detail-item">
+                        <div className="detail-item-label">Tags</div>
+                        <div className="detail-item-value" style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+                            {d.tags.split(',').map(t => t.trim()).filter(Boolean).map(t => <TagBadge key={t} tag={t} />)}
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* ── Section 3: IP Reputation ── */}
+            {Object.keys(reputation).length > 0 && (
+                <>
+                    <SectionHeader icon={Globe} title="IP Reputation" count={Object.keys(reputation).length} />
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        {Object.entries(reputation).map(([ip, rep]) => {
+                            const scoreColor = rep.abuse_score >= 50 ? '#ef4444' : rep.abuse_score >= 20 ? '#f59e0b' : '#22c55e'
+                            return (
+                                <div key={ip} style={{
+                                    background: '#161b22', border: '1px solid #30363d', borderRadius: '8px',
+                                    padding: '0.75rem 1rem', flex: '1 1 220px', minWidth: '220px'
+                                }}>
+                                    <div style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: '#c9d1d9', marginBottom: '0.5rem' }}>{ip}</div>
+                                    <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', fontSize: '0.75rem' }}>
+                                        <div>
+                                            <span style={{ color: '#7d8590' }}>Abuse Score </span>
+                                            <span style={{ color: scoreColor, fontWeight: 700 }}>{rep.abuse_score}%</span>
+                                        </div>
+                                        {rep.country && <div><span style={{ color: '#7d8590' }}>Country </span><span style={{ color: '#c9d1d9' }}>{rep.country}</span></div>}
+                                        {rep.isp && <div><span style={{ color: '#7d8590' }}>ISP </span><span style={{ color: '#c9d1d9' }}>{rep.isp}</span></div>}
+                                        {rep.is_malicious && <span className="badge" style={{ color: '#ef4444', background: '#ef444415', border: '1px solid #ef444430', fontSize: '0.65rem' }}>MALICIOUS</span>}
+                                    </div>
+                                </div>
+                            )
+                        })}
+                    </div>
+                </>
+            )}
+
+            {/* ── Section 4: Destination History ── */}
+            {destHistory && (
+                <>
+                    <SectionHeader icon={History} title="Destination History" />
+                    <div className="detail-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
+                        <div className="detail-item">
+                            <div className="detail-item-label">First Seen</div>
+                            <div className="detail-item-value">{fmtTime(destHistory.first_seen)}</div>
+                        </div>
+                        <div className="detail-item">
+                            <div className="detail-item-label">Sessions Observed</div>
+                            <div className="detail-item-value">{destHistory.session_count}</div>
+                        </div>
+                        <div className="detail-item">
+                            <div className="detail-item-label">Avg Data/Session</div>
+                            <div className="detail-item-value">{destHistory.avg_bytes}</div>
+                        </div>
+                    </div>
+                </>
+            )}
+
+            {/* ── Related Alerts (clickable → navigates to Alerts page) ── */}
+            {relatedAlerts.length > 0 && (
+                <>
+                    <SectionHeader icon={AlertTriangle} title="Related Alerts" count={relatedAlerts.length} />
+                    <div style={{ maxHeight: '200px', overflowY: 'auto', borderRadius: '6px', border: '1px solid #30363d' }}>
+                        <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
+                            <thead>
+                                <tr style={{ background: '#161b22', position: 'sticky', top: 0 }}>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d' }}>Time</th>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d' }}>Severity</th>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d' }}>Signature</th>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d' }}>Category</th>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'center', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d', width: '40px' }}></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {relatedAlerts.map(a => (
+                                    <tr key={a.id}
+                                        onClick={(e) => { e.stopPropagation(); navigate(`/alerts?alert_id=${a.id}&search=${encodeURIComponent(d.dst_ip)}`) }}
+                                        style={{ borderBottom: '1px solid #21262d', cursor: 'pointer', transition: 'background 0.15s' }}
+                                        onMouseEnter={e => e.currentTarget.style.background = 'rgba(59,130,246,0.06)'}
+                                        onMouseLeave={e => e.currentTarget.style.background = ''}
+                                    >
+                                        <td style={{ padding: '0.35rem 0.6rem', color: '#7d8590', whiteSpace: 'nowrap' }}>{fmtTime(a.timestamp)}</td>
+                                        <td style={{ padding: '0.35rem 0.6rem' }}><SeverityBadge severity={a.severity} /></td>
+                                        <td style={{ padding: '0.35rem 0.6rem', color: '#c9d1d9', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.signature}>{a.signature}</td>
+                                        <td style={{ padding: '0.35rem 0.6rem', color: '#7d8590' }}>{a.category || '—'}</td>
+                                        <td style={{ padding: '0.35rem 0.6rem', textAlign: 'center' }}><ExternalLink size={12} style={{ color: '#3b82f6' }} /></td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
+            )}
+
+            {/* ── Other Connections to Same Destination (clickable → searches that IP) ── */}
+            {relatedConns.length > 0 && (
+                <>
+                    <SectionHeader icon={Layers} title="Other Connections to This Destination" count={relatedConns.length} />
+                    <div style={{ maxHeight: '180px', overflowY: 'auto', borderRadius: '6px', border: '1px solid #30363d' }}>
+                        <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
+                            <thead>
+                                <tr style={{ background: '#161b22', position: 'sticky', top: 0 }}>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d' }}>Source</th>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d' }}>Protocol</th>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d' }}>Packets</th>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d' }}>Data</th>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d' }}>Tags</th>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d' }}>Time</th>
+                                    <th style={{ padding: '0.4rem 0.6rem', textAlign: 'center', color: '#7d8590', fontWeight: 500, borderBottom: '1px solid #30363d', width: '40px' }}></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {relatedConns.map(rc => (
+                                    <tr key={rc.id}
+                                        onClick={(e) => { e.stopPropagation(); navigate(`/connections?conn_id=${rc.id}&search=${encodeURIComponent(rc.dst_ip)}`) }}
+                                        style={{ borderBottom: '1px solid #21262d', cursor: 'pointer', transition: 'background 0.15s' }}
+                                        onMouseEnter={e => e.currentTarget.style.background = 'rgba(59,130,246,0.06)'}
+                                        onMouseLeave={e => e.currentTarget.style.background = ''}
+                                    >
+                                        <td style={{ padding: '0.35rem 0.6rem', fontFamily: 'monospace', color: '#c9d1d9', fontSize: '0.7rem' }}>{rc.src_ip}{rc.src_port ? `:${rc.src_port}` : ''}</td>
+                                        <td style={{ padding: '0.35rem 0.6rem' }}><ProtoBadge proto={rc.protocol} /></td>
+                                        <td style={{ padding: '0.35rem 0.6rem', color: '#c9d1d9' }}>{rc.packets.toLocaleString()}</td>
+                                        <td style={{ padding: '0.35rem 0.6rem', color: '#c9d1d9' }}>{rc.bytes}</td>
+                                        <td style={{ padding: '0.35rem 0.6rem' }}>{rc.tags ? <TagBadge tag={rc.tags} /> : <span style={{ color: '#484f58' }}>—</span>}</td>
+                                        <td style={{ padding: '0.35rem 0.6rem', color: '#7d8590', whiteSpace: 'nowrap' }}>{fmtTime(rc.time)}</td>
+                                        <td style={{ padding: '0.35rem 0.6rem', textAlign: 'center' }}><ExternalLink size={12} style={{ color: '#3b82f6' }} /></td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
+            )}
+
+            {/* ── AI Analyze Button ── */}
+            <div className="detail-divider">
+                {!aiAnalysis[c.id] && !aiLoading[c.id] && (
+                    <button onClick={(e) => onAnalyze(c, e)} className="ai-btn">
+                        <Sparkles size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} /> Analyze Connection
+                    </button>
+                )}
+
+                {aiLoading[c.id] && (
+                    <div className="ai-loading">
+                        <div className="spinner" />
+                        Analyzing connection with AI...
+                    </div>
+                )}
+
+                {aiAnalysis[c.id] && !aiLoading[c.id] && (
+                    <div className="ai-panel">
+                        <div className="ai-panel-header">
+                            <Sparkles size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} /> AI Connection Analysis
+                            <button onClick={(e) => { e.stopPropagation(); setAiAnalysis(prev => { const next = { ...prev }; delete next[c.id]; return next }) }} className="btn-ghost" style={{ marginLeft: 'auto', padding: '2px 6px', fontSize: '0.7rem', color: '#7d8590' }}><X size={14} /></button>
+                        </div>
+                        <div className="ai-panel-body">
+                            {aiAnalysis[c.id].split('**').map((part, idx) =>
+                                idx % 2 === 1
+                                    ? <strong key={idx} style={{ color: '#a0e8ff' }}>{part}</strong>
+                                    : <span key={idx}>{part}</span>
+                            )}
+                        </div>
+                        <div className="ai-panel-footer">
+                            <span>Powered by Groq AI</span>
+                            <button onClick={(e) => onReanalyze(c, e)}>Re-analyze</button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    )
+}
+
 const Connections = () => {
     const { sessionId } = useSession()
+    const navigate = useNavigate()
+    const [searchParams, setSearchParams] = useSearchParams()
     const cacheKey = `connections-${sessionId || 0}`
     const cached = _connCache.get(cacheKey)
 
@@ -94,7 +361,7 @@ const Connections = () => {
     const [loading, setLoading] = useState(!cached)
 
     // Filters
-    const [search, setSearch] = useState('')
+    const [search, setSearch] = useState(searchParams.get('search') || '')
     const [proto, setProto] = useState('')
     const [port, setPort] = useState('')
     const [tag, setTag] = useState('')
@@ -112,6 +379,37 @@ const Connections = () => {
     const [expanded, setExpanded] = useState(null)
     const [aiAnalysis, setAiAnalysis] = useState({})
     const [aiLoading, setAiLoading] = useState({})
+    const [connDetails, setConnDetails] = useState({})
+    const [detailsLoading, setDetailsLoading] = useState({})
+
+    // Handle incoming URL params (cross-links from related connections / alerts)
+    useEffect(() => {
+        const connId = searchParams.get('conn_id')
+        const searchQ = searchParams.get('search')
+        if (searchQ && search !== searchQ) setSearch(searchQ)
+        if (connId && connections.length > 0) {
+            const id = parseInt(connId, 10)
+            if (connections.some(c => c.id === id)) {
+                setExpanded(id)
+                // Fetch details for this connection
+                if (!connDetails[id]) {
+                    setDetailsLoading(p => ({ ...p, [id]: true }))
+                    fetch(`${API}/api/connections/${id}/details`)
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.ok) setConnDetails(p => ({ ...p, [id]: data }))
+                            setDetailsLoading(p => ({ ...p, [id]: false }))
+                        })
+                        .catch(() => setDetailsLoading(p => ({ ...p, [id]: false })))
+                }
+                setSearchParams({}, { replace: true })
+            }
+        } else if (connId && connections.length === 0) {
+            // connections not loaded yet — keep params, will retry on next render
+        } else if (!connId && searchQ) {
+            setSearchParams({}, { replace: true })
+        }
+    }, [connections, searchParams])
 
     const fetchConnections = useCallback(async () => {
         // Only show spinner on cold start (no cache)
@@ -164,6 +462,19 @@ const Connections = () => {
                 setAiAnalysis(p => { const n = { ...p }; delete n[id]; return n })
                 setAiLoading(p => { const n = { ...p }; delete n[id]; return n })
                 return null
+            }
+            // Expanding — fetch enriched details if not already cached
+            if (!connDetails[id]) {
+                setDetailsLoading(p => ({ ...p, [id]: true }))
+                fetch(`${API}/api/connections/${id}/details`)
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.ok) {
+                            setConnDetails(p => ({ ...p, [id]: data }))
+                        }
+                        setDetailsLoading(p => ({ ...p, [id]: false }))
+                    })
+                    .catch(() => setDetailsLoading(p => ({ ...p, [id]: false })))
             }
             return id
         })
@@ -363,59 +674,24 @@ const Connections = () => {
                                         {expanded === c.id && (
                                             <tr key={`${c.id}-detail`} className="detail-row">
                                                 <td colSpan={8}>
-                                                    <div className="detail-grid">
-                                                        {[
-                                                            ['Connection ID', `#${c.id}`],
-                                                            ['Source IP', c.src_ip],
-                                                            ['Destination IP', c.dst_ip],
-                                                            ['Protocol', c.protocol],
-                                                            ['Direction', c.direction],
-                                                            ['Packets', c.packets.toLocaleString()],
-                                                            ['Data', c.bytes],
-                                                            ['Started', fmtTime(c.time)],
-                                                        ].map(([label, val]) => (
-                                                            <div key={label} className="detail-item">
-                                                                <div className="detail-item-label">{label}</div>
-                                                                <div className="detail-item-value" style={{ fontFamily: typeof val === 'string' && val.includes('.') ? 'monospace' : 'inherit' }}>{val}</div>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-
-                                                    {/* ── AI Analyze Button ── */}
-                                                    <div className="detail-divider">
-                                                        {!aiAnalysis[c.id] && !aiLoading[c.id] && (
-                                                            <button onClick={(e) => handleAnalyze(c, e)} className="ai-btn">
-                                                                <Sparkles size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} /> Analyze Connection
-                                                            </button>
-                                                        )}
-
-                                                        {aiLoading[c.id] && (
-                                                            <div className="ai-loading">
-                                                                <div className="spinner" />
-                                                                Analyzing connection with AI...
-                                                            </div>
-                                                        )}
-
-                                                        {aiAnalysis[c.id] && !aiLoading[c.id] && (
-                                                            <div className="ai-panel">
-                                                                <div className="ai-panel-header">
-                                                                    <Sparkles size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} /> AI Connection Analysis
-                                                                    <button onClick={(e) => { e.stopPropagation(); setAiAnalysis(prev => { const next = { ...prev }; delete next[c.id]; return next }) }} className="btn-ghost" style={{ marginLeft: 'auto', padding: '2px 6px', fontSize: '0.7rem', color: '#7d8590' }}><X size={14} /></button>
-                                                                </div>
-                                                                <div className="ai-panel-body">
-                                                                    {aiAnalysis[c.id].split('**').map((part, idx) =>
-                                                                        idx % 2 === 1
-                                                                            ? <strong key={idx} style={{ color: '#a0e8ff' }}>{part}</strong>
-                                                                            : <span key={idx}>{part}</span>
-                                                                    )}
-                                                                </div>
-                                                                <div className="ai-panel-footer">
-                                                                    <span>Powered by Groq AI</span>
-                                                                    <button onClick={(e) => handleReanalyze(c, e)}>Re-analyze</button>
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </div>
+                                                    {detailsLoading[c.id] && !connDetails[c.id] ? (
+                                                        <div style={{ padding: '1.5rem', textAlign: 'center', color: '#7d8590' }}>
+                                                            <div className="spinner" style={{ margin: '0 auto 0.5rem' }} />
+                                                            Loading connection details…
+                                                        </div>
+                                                    ) : (
+                                                        <ConnectionDetailPanel
+                                                            c={c}
+                                                            details={connDetails[c.id]}
+                                                            fmtTime={fmtTime}
+                                                            aiAnalysis={aiAnalysis}
+                                                            aiLoading={aiLoading}
+                                                            onAnalyze={handleAnalyze}
+                                                            onReanalyze={handleReanalyze}
+                                                            setAiAnalysis={setAiAnalysis}
+                                                            navigate={navigate}
+                                                        />
+                                                    )}
                                                 </td>
                                             </tr>
                                         )}
