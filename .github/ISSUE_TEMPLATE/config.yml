@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/DamodarPatil/FlowSentrix/wiki
+    about: Read the full documentation and guides
+  - name: Discussions
+    url: https://github.com/DamodarPatil/FlowSentrix/discussions
+    about: Join discussions with the community
+  - name: Security Vulnerability
+    url: https://github.com/DamodarPatil/FlowSentrix/security/advisories/new
+    about: Report a security vulnerability responsibly
