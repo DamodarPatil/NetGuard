@@ -1,12 +1,77 @@
 # FlowSentrix 🛡️
 
+<div align="center">
+
+[![GitHub Stars](https://img.shields.io/github/stars/DamodarPatil/FlowSentrix?style=for-the-badge&logo=github)](https://github.com/DamodarPatil/FlowSentrix)
+[![GitHub License](https://img.shields.io/github/license/DamodarPatil/FlowSentrix?style=for-the-badge)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)](https://www.python.org/)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg?style=for-the-badge)](https://github.com/psf/black)
+
+</div>
+
 **Real-time network traffic analyzer & intrusion detection system with CLI and Web GUI.**
 
 FlowSentrix captures live network traffic using tshark, detects threats with Suricata IDS rules, performs behavioral analysis (beaconing, data exfiltration, anomaly detection), and provides both a hacker-style CLI shell and a modern dark-mode web dashboard.
 
+> **Perfect for:** Security analysts, network administrators, SOC teams, incident responders, and cybersecurity researchers.
+
 ---
 
-## Features
+## 📑 Table of Contents
+
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [Configuration](#configuration)
+- [Contributing](#contributing)
+- [License](#license)
+- [Roadmap](#roadmap)
+
+---
+
+## ⚡ Quick Start
+
+**30-second setup (Linux/Ubuntu):**
+
+```bash
+# Install dependencies
+sudo apt update && sudo apt install python3 python3-pip python3-venv tshark suricata nodejs npm
+
+# Clone & setup
+git clone https://github.com/DamodarPatil/FlowSentrix.git
+cd FlowSentrix
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cd web && npm install && npx vite build && cd ..
+
+# Run CLI (hacker mode)
+sudo venv/bin/python3 flowsentrix.py
+
+# Or run Web Dashboard (two terminals)
+# Terminal 1:
+sudo venv/bin/python3 web/api.py
+# Terminal 2:
+cd web && npm run dev  # Open http://localhost:5173
+```
+
+---
+
+## 🎯 Key Use Cases
+
+| Use Case | Why FlowSentrix |
+|----------|---|
+| 🏢 **Network Monitoring** | Real-time visibility into all network traffic with protocol detection |
+| 🔍 **Threat Hunting** | Detect beaconing, C2 communication, data exfiltration, anomalies |
+| 🚨 **Incident Response** | Quickly investigate network incidents with connection tracking & behavioral analysis |
+| 📊 **SOC Operations** | Alert correlation, AI-powered severity assessment, IP reputation checks |
+| 👤 **Security Research** | Analyze traffic patterns, test IDS detection, study network behavior |
+| 🎓 **Cybersecurity Training** | Learn network protocols, intrusion detection, incident response |
+
+---
+
+## 📊 Features
 
 ### Capture & Analysis
 - **Zero-drop packet capture** using dumpcap + tshark reprocessing
@@ -266,6 +331,40 @@ FlowSentrix uses SQLite WAL mode to handle concurrent access. If you see lock er
 # Rebuild the frontend
 cd web && npx vite build
 ```
+
+---
+
+## 🚀 Roadmap
+
+**Planned features for upcoming releases:**
+
+- [ ] Machine learning-based anomaly detection
+- [ ] Kubernetes network policy recommendations
+- [ ] YARA rule integration for malware detection
+- [ ] Slack/Teams integration for alerts
+- [ ] Time-travel analysis (historical traffic replay)
+- [ ] GeoIP mapping for traffic visualization
+- [ ] Automated incident enrichment
+- [ ] Multi-node aggregation & correlation
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to:
+- Report bugs
+- Request features
+- Submit pull requests
+- Set up the development environment
+
+---
+
+## 📞 Support & Community
+
+- 💬 **Discussions:** [GitHub Discussions](https://github.com/DamodarPatil/FlowSentrix/discussions)
+- 🐛 **Issues:** [GitHub Issues](https://github.com/DamodarPatil/FlowSentrix/issues)
+- 📖 **Documentation:** [GitHub Wiki](https://github.com/DamodarPatil/FlowSentrix/wiki)
+- 🔐 **Security:** See [SECURITY.md](SECURITY.md) for vulnerability reporting
 
 ---
 
